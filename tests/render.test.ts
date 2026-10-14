@@ -1,7 +1,17 @@
-import { test } from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,6 +28,18 @@ import {
 import { runProcess, work, type Runner } from "../src/render.ts";
 
 const kitRoot = fileURLToPath(new URL("..", import.meta.url));
+
+// Every temp folder a test makes is removed once the file's tests are done.
+const temps: string[] = [];
+after(() => {
+  for (const dir of temps) rmSync(dir, { recursive: true, force: true });
+});
+
+function tempDir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  temps.push(dir);
+  return dir;
+}
 
 type Clip = { file: string; in: number; out: number; caption: string };
 
@@ -43,7 +65,7 @@ function clipsCut(seconds: number, names = ["shot-01.webm", "shot-02.webm", "sho
 // A workspace per test: the caller's directory (INIT_CWD), a clips folder and a private
 // system temp folder, so the test can see what render leaves behind there.
 function workspace(placeholders: string[] = []) {
-  const dir = mkdtempSync(join(tmpdir(), "studio-kit-render-test-"));
+  const dir = tempDir("studio-kit-render-test-");
   const clips = join(dir, "clips");
   const temp = join(dir, "tmp");
   mkdirSync(clips);
@@ -52,12 +74,17 @@ function workspace(placeholders: string[] = []) {
   return { dir, clips, temp, out: join(dir, "out") };
 }
 
-function render(ws: ReturnType<typeof workspace>, script: unknown, extra: string[] = []) {
+function render(ws: ReturnType<typeof workspace>, script: unknown, folders: { clips?: string; out?: string } = {}) {
   const file = join(ws.dir, "cutscript.json");
   writeFileSync(file, typeof script === "string" ? script : JSON.stringify(script));
   const result = spawnSync(
     process.execPath,
-    ["--import", "tsx", "src/render.ts", "--script", "cutscript.json", "--clips", "clips", "--out", "out", ...extra],
+    [
+      "--import", "tsx", "src/render.ts",
+      "--script", "cutscript.json",
+      "--clips", folders.clips ?? "clips",
+      "--out", folders.out ?? "out",
+    ],
     {
       cwd: kitRoot,
       encoding: "utf8",
@@ -239,13 +266,112 @@ test("missing flags, an unreadable script and a script that is not JSON are refu
     env: { ...process.env, INIT_CWD: ws.dir },
   });
   assert.equal(bare.status, 2);
+  assert.deepEqual(lines(bare.stdout), ["render: --script <path>, --clips <dir> and --out <dir> are required"]);
   const noOut = spawnSync(
     process.execPath,
     ["--import", "tsx", "src/render.ts", "--script", "cutscript.json", "--clips", "clips"],
     { cwd: kitRoot, encoding: "utf8", env: { ...process.env, INIT_CWD: ws.dir } },
   );
   assert.equal(noOut.status, 2);
+  assert.deepEqual(lines(noOut.stdout), ["render: --script <path>, --clips <dir> and --out <dir> are required"]);
+  const outFile = workspace(["shot-01.webm", "shot-02.webm", "shot-03.webm"]);
+  writeFileSync(outFile.out, "a file, not a folder");
+  const notFolder = render(outFile, cutScript(clipsCut(15)));
+  assert.equal(notFolder.result.status, 2, notFolder.output);
+  assert.deepEqual(lines(notFolder.result.stdout), ["--out is not a folder"]);
+  const noClips = workspace();
+  rmSync(noClips.clips, { recursive: true });
+  const missingClips = render(noClips, cutScript(clipsCut(15)));
+  assert.equal(missingClips.result.status, 2);
+  assert.match(missingClips.result.stdout, /^--clips is not a folder$/m);
   assertRefused(ws, render(ws, "{not json"), /cut script/);
+});
+
+// Accepted by the gate: work starts and the placeholder clips fail the transcode step.
+function assertAccepted(ws: ReturnType<typeof workspace>, run: ReturnType<typeof render>) {
+  assert.equal(run.result.status, 1, run.output);
+  assert.deepEqual(lines(run.result.stdout), [], run.result.stdout);
+  const report = JSON.parse(readFileSync(join(ws.out, "render-report.json"), "utf8"));
+  assert.equal(report.steps[0].name, "transcode");
+  rmSync(ws.out, { recursive: true, force: true });
+}
+
+const astral = (count: number) => "\u{1F600}".repeat(count);
+
+test("caption length counts code points: 60 astral characters pass, 61 are refused", () => {
+  const ws = workspace(["shot-01.webm", "shot-02.webm", "shot-03.webm"]);
+  const sixty = clipsCut(15);
+  sixty[0].caption = astral(60);
+  assert.equal(sixty[0].caption.length, 120);
+  assertAccepted(ws, render(ws, cutScript(sixty)));
+  const over = clipsCut(15);
+  over[0].caption = astral(61);
+  const run = render(ws, cutScript(over));
+  assertRefused(ws, run, /clip 1: caption must be 1 to 60 characters/);
+  assert.equal(lines(run.result.stdout).length, 1);
+});
+
+const cardFields = [
+  { field: "opening.headline", limit: 60, set: (text: string) => ({ opening: { headline: text, sub: "13 October" } }) },
+  { field: "opening.sub", limit: 80, set: (text: string) => ({ opening: { headline: "The run", sub: text } }) },
+  { field: "proof.line", limit: 80, set: (text: string) => ({ proof: { line: text, source: "notablackbox/nabb-fe#1" } }) },
+  { field: "proof.source", limit: 80, set: (text: string) => ({ proof: { line: "Merged", source: text } }) },
+  { field: "closing.line", limit: 80, set: (text: string) => ({ closing: { line: text } }) },
+];
+
+for (const { field, limit, set } of cardFields) {
+  test(`${field} over ${limit} characters is refused with one line naming it; ${limit}, astral included, passes`, () => {
+    const ws = workspace(["shot-01.webm", "shot-02.webm", "shot-03.webm"]);
+    const clips = clipsCut(15);
+    const run = render(ws, cutScript(clips, set("x".repeat(limit + 1))));
+    assertRefused(ws, run, new RegExp(`^${field.replace(".", "\\.")} runs ${limit + 1} characters, want at most ${limit}$`, "m"));
+    assert.equal(lines(run.result.stdout).length, 1, run.result.stdout);
+    assertRefused(ws, render(ws, cutScript(clips, set(astral(limit + 1)))), new RegExp(field.replace(".", "\\.")));
+    assertAccepted(ws, render(ws, cutScript(clips, set("x".repeat(limit)))));
+    assertAccepted(ws, render(ws, cutScript(clips, set(astral(limit)))));
+  });
+}
+
+test("--out that is --clips, inside it, or around it is refused before any work", () => {
+  for (const [clips, out] of [["clips", "clips"], ["clips", "clips/out"], ["out/clips", "out"]]) {
+    const ws = workspace();
+    mkdirSync(join(ws.dir, clips), { recursive: true });
+    for (const name of ["shot-01.webm", "shot-02.webm", "shot-03.webm"]) writeFileSync(join(ws.dir, clips, name), "x");
+    const before = readdirSync(join(ws.dir, clips)).sort();
+    const run = render(ws, cutScript(clipsCut(15)), { clips, out });
+    assert.equal(run.result.status, 2, `${clips} ${out}: ${run.output}`);
+    assert.deepEqual(lines(run.result.stdout), ["--out and --clips must be separate folders, neither inside the other"]);
+    assert.deepEqual(readdirSync(join(ws.dir, clips)).sort(), before, "nothing written into --clips");
+    if (out !== clips && !clips.startsWith(`${out}/`)) assert.equal(existsSync(join(ws.dir, out)), false);
+    assert.deepEqual(kitTemp(ws), []);
+  }
+});
+
+test("a clip named like one of render's own outputs is refused", () => {
+  for (const name of ["teaser.mp4", "teaser-4x5.mp4", "poster.png", "render-report.json"]) {
+    const ws = workspace(["shot-01.webm", "shot-02.webm", name]);
+    const clips = clipsCut(15);
+    clips[2].file = name;
+    const run = render(ws, cutScript(clips));
+    assertRefused(ws, run, new RegExp(`^clip 3: "${name.replace(".", "\\.")}" is a name render writes in --out$`, "m"));
+  }
+});
+
+test("a newline or control character in a clip name cannot forge a line: one problem is one line", () => {
+  for (const bad of ["a\nscript runs 50.0 seconds", "a\r\nb.webm", "a\u001b[2Jb.webm", "a\u2028b.webm", "a\u0085b.webm"]) {
+    const ws = workspace(["shot-01.webm", "shot-02.webm", "shot-03.webm"]);
+    try {
+      writeFileSync(join(ws.clips, bad), "x");
+    } catch {
+      // A name the file system will not hold is still refused below.
+    }
+    const clips = clipsCut(15);
+    clips[1].file = bad;
+    const run = render(ws, cutScript(clips));
+    assertRefused(ws, run, /clip 2/);
+    assert.equal(run.result.stdout.split("\n").filter((l) => l !== "").length, 1, JSON.stringify(run.result.stdout));
+    assert.doesNotMatch(run.result.stdout, /[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u2028\u2029]/, JSON.stringify(run.result.stdout));
+  }
 });
 
 test("a clip ffmpeg cannot read fails the transcode step: report written, ok false, exit 1", () => {
@@ -346,6 +472,32 @@ test("a step that runs past its time limit fails in the kit's words", async () =
   assert.match(report.steps[1].error, /took longer than 15 minutes/);
 });
 
+test("a symlink in --out at the report's or an output's name is replaced, never written through", async () => {
+  const ws = workspace(["shot-01.webm", "shot-02.webm", "shot-03.webm"]);
+  const outside = join(ws.dir, "outside");
+  mkdirSync(outside);
+  mkdirSync(ws.out);
+  for (const name of ["render-report.json", "teaser.mp4"]) {
+    writeFileSync(join(outside, name), "keep me");
+    symlinkSync(join(outside, name), join(ws.out, name));
+  }
+  const script = cutScript(clipsCut(15)) as unknown as TeaserProps;
+  for (const fake of [{ measures: goodMeasures }, { measures: goodMeasures, failOn: () => "fail" as const }]) {
+    const report = await work(script, ws.clips, ws.out, { run: fakeRunner(fake, { temp: "" }), log: () => {} });
+    for (const name of ["render-report.json", "teaser.mp4"]) {
+      assert.equal(readFileSync(join(outside, name), "utf8"), "keep me", `${name} was written through`);
+    }
+    assert.equal(lstatSync(join(ws.out, "render-report.json")).isFile(), true);
+    assert.deepEqual(JSON.parse(readFileSync(join(ws.out, "render-report.json"), "utf8")), report);
+    assert.deepEqual(readdirSync(ws.out).filter((n) => n.endsWith(".tmp")), [], "no temp report left");
+    // Put the links back for the failing pass.
+    for (const name of ["render-report.json", "teaser.mp4"]) {
+      rmSync(join(ws.out, name), { force: true });
+      symlinkSync(join(outside, name), join(ws.out, name));
+    }
+  }
+});
+
 test("measure fails a reframe whose length is off the master by more than a frame, and removes the outputs", async () => {
   const { report, files } = await runWork({
     measures: { ...goodMeasures, "teaser-4x5.mp4": { duration: 52.9, width: 1080, height: 1350 } },
@@ -382,46 +534,95 @@ function running(pid: number): boolean {
   }
 }
 
+// The pid files are written first, before anything sleeps; the late file comes well after the
+// time limit, so a loaded box can neither miss a pid nor see the late write before the kill.
+const REAP_LIMIT_MS = 3000;
+const LATE_SECONDS = 6;
+
 function leaver(dir: string): string[] {
   return [
     "-c",
-    `sleep 30 & echo $! > ${dir}/bg.pid; ` +
-      `setsid sh -c 'echo $$ > ${dir}/own.pid; sleep 2; touch ${dir}/late' & ` +
+    `setsid sh -c 'echo $$ > ${dir}/own.pid; sleep ${LATE_SECONDS}; touch ${dir}/late' & ` +
+      `sleep 30 & echo $! > ${dir}/bg.pid; ` +
       "sleep 30",
   ];
 }
 
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
 
+// The pid a child wrote, polled for: under load the write can trail the spawn.
+async function pidFrom(file: string, waitMs = 2000): Promise<number> {
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    try {
+      const text = readFileSync(file, "utf8").trim();
+      if (/^\d+$/.test(text)) return Number(text);
+    } catch {
+      // Not there yet.
+    }
+    if (Date.now() > deadline) assert.fail(`${basename(file)} was never written`);
+    await sleep(50);
+  }
+}
+
+// Waits out the late write: LATE_SECONDS after the call started, plus a margin.
+const pastLate = (started: number) => sleep(Math.max(0, started + LATE_SECONDS * 1000 + 700 - Date.now()));
+
 test("a timed-out process is killed with every descendant before the call returns", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "studio-kit-reap-"));
+  const dir = tempDir("studio-kit-reap-");
   const started = Date.now();
-  const result = await runProcess("sh", leaver(dir), { timeoutMs: 600 });
+  const result = await runProcess("sh", leaver(dir), { timeoutMs: REAP_LIMIT_MS });
   assert.equal(result.timedOut, true);
-  assert.ok(Date.now() - started < 10_000);
-  const pids = ["bg.pid", "own.pid"].map((name) => Number(readFileSync(join(dir, name), "utf8").trim()));
-  for (const pid of pids) assert.equal(running(pid), false, `pid ${pid} survived`);
-  await sleep(2500);
+  assert.ok(Date.now() - started < REAP_LIMIT_MS + 10_000);
+  for (const name of ["bg.pid", "own.pid"]) {
+    const pid = await pidFrom(join(dir, name));
+    assert.equal(running(pid), false, `${name} ${pid} survived`);
+  }
+  await pastLate(started);
   assert.equal(existsSync(join(dir, "late")), false, "a descendant wrote after the call returned");
 });
 
 test("a render step past its time limit fails in the kit's words and leaves nothing running", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "studio-kit-reap-"));
+  const dir = tempDir("studio-kit-reap-");
   const fake = fakeRunner({ measures: goodMeasures }, { temp: "" });
   const ws = workspace(["shot-01.webm", "shot-02.webm", "shot-03.webm"]);
-  const run: Runner = (command, args, options) =>
-    command === "npx" ? runProcess("sh", leaver(dir), { cwd: options.cwd, timeoutMs: 600 }) : fake(command, args, options);
+  let started = 0;
+  const run: Runner = (command, args, options) => {
+    if (command !== "npx") return fake(command, args, options);
+    started = Date.now();
+    return runProcess("sh", leaver(dir), { cwd: options.cwd, timeoutMs: REAP_LIMIT_MS });
+  };
   const report = await work(cutScript(clipsCut(15)) as unknown as TeaserProps, ws.clips, ws.out, { run, log: () => {} });
   assert.equal(report.ok, false);
   assert.equal(report.steps[1].name, "render-teaser");
   assert.match(report.steps[1].error, /^rendering Teaser took longer than 15 minutes$/);
   assert.deepEqual(readdirSync(ws.out), ["render-report.json"]);
   for (const name of ["bg.pid", "own.pid"]) {
-    const pid = Number(readFileSync(join(dir, name), "utf8").trim());
+    const pid = await pidFrom(join(dir, name));
     assert.equal(running(pid), false, `${name} ${pid} survived`);
   }
-  await sleep(2500);
+  await pastLate(started);
   assert.equal(existsSync(join(dir, "late")), false);
+});
+
+test("a child that starts a new-session grandchild and exits at once leaves nothing running", async () => {
+  const dir = tempDir("studio-kit-reap-");
+  const started = Date.now();
+  const result = await runProcess(
+    "sh",
+    ["-c", `setsid sh -c 'echo $$ > ${dir}/own.pid; sleep ${LATE_SECONDS}; touch ${dir}/late' & exit 0`],
+    { timeoutMs: 30_000 },
+  );
+  assert.equal(result.timedOut, false);
+  assert.equal(result.status, 0);
+  // The grandchild may have been killed before it wrote its pid; if it wrote one, it is gone.
+  if (existsSync(join(dir, "own.pid"))) {
+    const pid = await pidFrom(join(dir, "own.pid"));
+    assert.equal(running(pid), false, `grandchild ${pid} survived`);
+  }
+  await pastLate(started);
+  assert.equal(existsSync(join(dir, "late")), false, "the grandchild wrote after the call returned");
+  assert.equal(`${result.stdout}${result.stderr}`.includes("STUDIO_KIT_FAMILY"), false);
 });
 
 test("a tool that cannot start, or that prints too much, fails in its own words", async () => {

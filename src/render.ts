@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -6,15 +7,17 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 import { FPS, clipFrames, teaserFrames, type TeaserProps } from "./remotion/Teaser.tsx";
+import { shown } from "./walk.ts";
 
 // Exit codes: 0 done and report written, 2 refused before any work, 1 anything unexpected.
 // Refusals go to stdout, one line per problem, and write nothing at all.
@@ -26,6 +29,14 @@ const MAX_SECONDS = 60;
 const MIN_CLIPS = 3;
 const MAX_CLIPS = 5;
 const MAX_CAPTION = 60;
+// Card text limits, in Unicode characters (code points), so every accepted line fits its card.
+const CARD_LIMITS: { field: string; limit: number; read: (raw: Record<string, unknown>) => unknown }[] = [
+  { field: "opening.headline", limit: 60, read: (raw) => (isObject(raw.opening) ? raw.opening.headline : undefined) },
+  { field: "opening.sub", limit: 80, read: (raw) => (isObject(raw.opening) ? raw.opening.sub : undefined) },
+  { field: "proof.line", limit: 80, read: (raw) => (isObject(raw.proof) ? raw.proof.line : undefined) },
+  { field: "proof.source", limit: 80, read: (raw) => (isObject(raw.proof) ? raw.proof.source : undefined) },
+  { field: "closing.line", limit: 80, read: (raw) => (isObject(raw.closing) ? raw.closing.line : undefined) },
+];
 const OUTPUTS = { teaser: "teaser.mp4", teaser4x5: "teaser-4x5.mp4", poster: "poster.png" };
 const REPORT = "render-report.json";
 const MINUTE = 60 * 1000;
@@ -55,10 +66,23 @@ function isIsoDate(value: unknown): value is string {
   return date.getUTCFullYear() === y && date.getUTCMonth() === m - 1 && date.getUTCDate() === d;
 }
 
-// A plain name: no folder part, not "." or "..", nothing that could step outside --clips.
+// Unicode characters, not UTF-16 units: an emoji counts as one.
+const characters = (text: string): number => [...text].length;
+
+// A plain name: no folder part, not "." or "..", nothing that could step outside --clips, and
+// no control or line-breaking character that could split a printed line.
 function isPlainName(name: string): boolean {
-  return name !== "" && name !== "." && name !== ".." && !name.includes("/") && !name.includes("\\") && !name.includes("\0");
+  return (
+    name !== "" &&
+    name !== "." &&
+    name !== ".." &&
+    !name.includes("/") &&
+    !name.includes("\\") &&
+    !/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(name)
+  );
 }
+
+const OUTPUT_NAMES = new Set<string>([...Object.values(OUTPUTS), REPORT]);
 
 // Seconds to one decimal, rounded away from the range they fall outside, so a line never
 // names a value inside the range it refuses (44.97 shows 44.9, 60.03 shows 60.1).
@@ -82,6 +106,12 @@ export function validateScript(raw: unknown, clipsDir: string): { script?: Tease
     problems.push("proof needs a line and a source");
   }
   if (!isObject(raw.closing) || !filled(raw.closing.line)) problems.push("closing needs a line");
+  for (const { field, limit, read } of CARD_LIMITS) {
+    const text = read(raw);
+    if (typeof text === "string" && characters(text) > limit) {
+      problems.push(`${field} runs ${characters(text)} characters, want at most ${limit}`);
+    }
+  }
 
   if (!Array.isArray(raw.clips)) return { problems: [...problems, "clips is not a list"] };
   const clips = raw.clips as unknown[];
@@ -106,7 +136,9 @@ export function validateScript(raw: unknown, clipsDir: string): { script?: Tease
     }
     const file = entry.file;
     if (typeof file !== "string" || !isPlainName(file)) {
-      problems.push(`${label}: ${JSON.stringify(file ?? "")} is not a plain file name inside --clips`);
+      problems.push(`${label}: ${shown(file ?? "")} is not a plain file name inside --clips`);
+    } else if (OUTPUT_NAMES.has(file)) {
+      problems.push(`${label}: ${shown(file)} is a name render writes in --out`);
     } else if (clipsReal) {
       let inside = false;
       try {
@@ -115,7 +147,7 @@ export function validateScript(raw: unknown, clipsDir: string): { script?: Tease
       } catch {
         inside = false;
       }
-      if (!inside) problems.push(`${label}: ${file} is not in --clips`);
+      if (!inside) problems.push(`${label}: ${shown(file)} is not in --clips`);
     }
     const start = entry.in;
     const end = entry.out;
@@ -130,7 +162,7 @@ export function validateScript(raw: unknown, clipsDir: string): { script?: Tease
       problems.push(`${label}: runs ${shownOutside(seconds, 1, Infinity)} seconds, want at least 1`);
       timingOk = false;
     }
-    if (!filled(entry.caption) || entry.caption.length > MAX_CAPTION) {
+    if (!filled(entry.caption) || characters(entry.caption) > MAX_CAPTION) {
       problems.push(`${label}: caption must be 1 to ${MAX_CAPTION} characters`);
     }
   });
@@ -161,10 +193,12 @@ export type RunResult = { status: number | null; stdout: string; stderr: string;
 export type Runner = (command: string, args: string[], options: { cwd?: string; timeoutMs: number }) => Promise<RunResult>;
 
 const OUTPUT_LIMIT = 16 * 1024 * 1024;
-const REAP_POLL_MS = 1000;
 const REAP_WAIT_MS = 10_000;
+// The name of the environment entry that marks every process of one child's family. Its value
+// is a fresh random id per child and is never printed.
+const FAMILY_VAR = "STUDIO_KIT_FAMILY";
 
-type Proc = { pid: number; ppid: number; pgrp: number; sid: number; zombie: boolean };
+type Proc = { pid: number; ppid: number; zombie: boolean };
 
 // Every process the system shows, from /proc; null where there is no /proc to read.
 function processes(): Proc[] | null {
@@ -178,15 +212,9 @@ function processes(): Proc[] | null {
   for (const name of entries) {
     try {
       const stat = readFileSync(`/proc/${name}/stat`, "utf8");
-      // "pid (comm) state ppid pgrp session ...": comm may hold spaces and parentheses.
+      // "pid (comm) state ppid ...": comm may hold spaces and parentheses.
       const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
-      list.push({
-        pid: Number(name),
-        ppid: Number(fields[1]),
-        pgrp: Number(fields[2]),
-        sid: Number(fields[3]),
-        zombie: fields[0] === "Z" || fields[0] === "X",
-      });
+      list.push({ pid: Number(name), ppid: Number(fields[1]), zombie: fields[0] === "Z" || fields[0] === "X" });
     } catch {
       // Gone between the listing and the read.
     }
@@ -194,34 +222,53 @@ function processes(): Proc[] | null {
   return list;
 }
 
-// The child runs in a session of its own (spawn's `detached`). Remotion starts Chromium in a
-// session of its own too, so the kit keeps the set of sessions the child's descendants hold,
-// learnt while it runs, and kills by session as well as by descent: a process that outlives
-// its parent keeps its session.
+// True when the process's environment holds exactly `entry`. Unreadable (another user's
+// process, or gone): false.
+function carries(pid: number, entry: Buffer): boolean {
+  let environ: Buffer;
+  try {
+    environ = readFileSync(`/proc/${pid}/environ`);
+  } catch {
+    return false;
+  }
+  for (let at = environ.indexOf(entry); at !== -1; at = environ.indexOf(entry, at + 1)) {
+    const starts = at === 0 || environ[at - 1] === 0;
+    const ends = at + entry.length === environ.length || environ[at + entry.length] === 0;
+    if (starts && ends) return true;
+  }
+  return false;
+}
+
+// The child and everything it starts. Each child is spawned with a fresh marker in its
+// environment, which every descendant inherits (Chromium in a session of its own included,
+// and one reparented to init after its parent exited). The family is every live process that
+// carries the marker, and the live descendants of those. A reused pid carries no marker.
 class Family {
-  readonly sessions = new Set<number>();
-  constructor(readonly root: number) {
-    this.sessions.add(root);
+  private readonly entry: Buffer;
+  constructor(readonly root: number, marker: string) {
+    this.entry = Buffer.from(`${FAMILY_VAR}=${marker}`);
   }
 
   members(): number[] | null {
     const all = processes();
     if (!all) return null;
-    const live = all.filter((p) => !p.zombie);
-    const found = new Set<number>([this.root]);
-    let grew = true;
+    const live = all.filter((p) => !p.zombie && p.pid !== process.pid);
+    // The root while it is still this process's unreaped child is ours even before its exec
+    // has put the marker in place; its pid cannot be reused until it is reaped.
+    const found = new Set<number>(
+      live.filter((p) => (p.pid === this.root && p.ppid === process.pid) || carries(p.pid, this.entry)).map((p) => p.pid),
+    );
+    let grew = found.size > 0;
     while (grew) {
       grew = false;
       for (const p of live) {
-        if (!found.has(p.pid) && (found.has(p.ppid) || this.sessions.has(p.sid))) {
+        if (!found.has(p.pid) && found.has(p.ppid)) {
           found.add(p.pid);
           grew = true;
         }
       }
     }
-    const members = live.filter((p) => found.has(p.pid));
-    for (const p of members) this.sessions.add(p.sid);
-    return members.map((p) => p.pid);
+    return [...found];
   }
 
   killAll(): void {
@@ -278,9 +325,14 @@ export const runProcess: Runner = (command, args, { cwd, timeoutMs }) =>
     let family: Family | undefined;
     let settled = false;
 
-    const child = spawn(command, args, { cwd, detached: true, stdio: ["ignore", "pipe", "pipe"] });
-    if (child.pid !== undefined) family = new Family(child.pid);
-    const watch = setInterval(() => family?.members(), REAP_POLL_MS);
+    const marker = randomUUID();
+    const child = spawn(command, args, {
+      cwd,
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, [FAMILY_VAR]: marker },
+    });
+    if (child.pid !== undefined) family = new Family(child.pid, marker);
     const timer = setTimeout(() => {
       timedOut = true;
       family?.killAll();
@@ -303,7 +355,6 @@ export const runProcess: Runner = (command, args, { cwd, timeoutMs }) =>
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      clearInterval(watch);
       const gone = family ? await family.end() : true;
       // With the family gone the pipes close; read what is left in them, but never hang on it.
       let cap: NodeJS.Timeout | undefined;
@@ -520,9 +571,60 @@ export async function work(script: TeaserProps, clipsDir: string, out: string, s
       removeOutputs(out);
       report.outputs = {};
     }
-    writeFileSync(join(out, REPORT), JSON.stringify(report, null, 2) + "\n");
+    writeInOut(out, REPORT, JSON.stringify(report, null, 2) + "\n");
   }
   return report;
+}
+
+// The real path a folder has or would have: the nearest existing ancestor resolved, the rest
+// appended, so a symlink cannot hide that two folders are one.
+function realFolder(path: string): string {
+  let head = resolve(path);
+  const tail: string[] = [];
+  for (;;) {
+    try {
+      return join(realpathSync(head), ...tail.reverse());
+    } catch {
+      const parent = dirname(head);
+      if (parent === head) return resolve(path);
+      tail.push(basename(head));
+      head = parent;
+    }
+  }
+}
+
+const within = (inner: string, outer: string): boolean => {
+  const rel = relative(outer, inner);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+};
+
+// --out must be a folder (or not exist yet), and apart from --clips: render removes and writes
+// its own names in --out, and must never touch a clip.
+export function checkOut(out: string, clipsDir: string): string[] {
+  try {
+    if (existsSync(out) && !statSync(out).isDirectory()) return ["--out is not a folder"];
+  } catch {
+    return ["--out is not a folder"];
+  }
+  const outReal = realFolder(out);
+  const clipsReal = realFolder(clipsDir);
+  if (within(outReal, clipsReal) || within(clipsReal, outReal)) {
+    return ["--out and --clips must be separate folders, neither inside the other"];
+  }
+  return [];
+}
+
+// Writes a file in --out without following a symlink at its name: the text goes to a fresh
+// name first (opened exclusively), then is renamed over the final name, which replaces a link
+// rather than writing through it.
+function writeInOut(out: string, name: string, text: string): void {
+  const temp = join(out, `.${name}.${randomUUID()}.tmp`);
+  try {
+    writeFileSync(temp, text, { flag: "wx" });
+    renameSync(temp, join(out, name));
+  } finally {
+    rmSync(temp, { force: true });
+  }
 }
 
 async function main(): Promise<number> {
@@ -532,11 +634,12 @@ async function main(): Promise<number> {
       options: { script: { type: "string" }, clips: { type: "string" }, out: { type: "string" } },
     }).values;
   } catch (error) {
-    console.error(`render: ${(error as Error).message}`);
+    // The message can quote an argument: keep it on one line.
+    console.log(`render: ${shown((error as Error).message).slice(1, -1)}`);
     return 2;
   }
   if (!values.script || !values.clips || !values.out) {
-    console.error("render: --script <path>, --clips <dir> and --out <dir> are required");
+    console.log("render: --script <path>, --clips <dir> and --out <dir> are required");
     return 2;
   }
 
@@ -551,12 +654,9 @@ async function main(): Promise<number> {
     return 2;
   }
   const { script, problems } = validateScript(raw, clipsDir);
-  if (!script) {
+  problems.push(...checkOut(out, clipsDir));
+  if (!script || problems.length > 0) {
     for (const problem of problems) console.log(problem);
-    return 2;
-  }
-  if (existsSync(out) && !statSync(out).isDirectory()) {
-    console.log("--out is not a folder");
     return 2;
   }
 

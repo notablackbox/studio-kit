@@ -51,7 +51,7 @@ export function Closing({ line, date, look }: { line: string; date: string; look
             lineHeight: 1.08,
             letterSpacing: "-0.02em",
             color: color.warmWhite,
-            textWrap: "balance",
+            ...look.wrap,
           }}
         >
           {line}
@@ -65,6 +65,7 @@ export function Closing({ line, date, look }: { line: string; date: string; look
             lineHeight: 1.3,
             color: color.silver,
             opacity: 0.72,
+            ...look.wrap,
           }}
         >
           {date}

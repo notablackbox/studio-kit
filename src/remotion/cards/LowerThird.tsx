@@ -28,7 +28,7 @@ export function LowerThird({ caption, look, top }: { caption: string; look: Look
         lineHeight: LINE,
         letterSpacing: "-0.01em",
         color: color.warmWhite,
-        textWrap: "balance",
+        ...look.wrap,
       }}
     >
       {caption}
