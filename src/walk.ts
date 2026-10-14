@@ -215,7 +215,10 @@ async function realWalk(
     for (let i = 0; i < shots.length; i++) {
       const shot = shots[i];
       const route = only ? ownerOf(routes, shot.route)!.fallback : shot.route;
-      const settle = ownerOf(routes, shot.route)!.settle;
+      // On a fallback page, settle on the entry whose route is that path, else body, and click nothing.
+      const fallbackPage = only || !routes.some((r) => r.route === route);
+      const settle = routes.find((r) => r.route === route)?.settle ?? "body";
+      const clicks = fallbackPage ? [] : shot.clicks;
       const context = await newRecordingContext(browser, out);
       let videoPath = "";
       let error = "";
@@ -237,10 +240,14 @@ async function realWalk(
         if (video) videoPath = await video.path();
         if (videoPath) written.push(videoPath);
 
-        try {
-          await page.goto(new URL(route, walkUrl).href, { waitUntil: "domcontentloaded" });
-        } catch {
-          error = "page did not load";
+        const target = new URL(route, walkUrl);
+        if (target.origin !== walkUrl.origin) error = "route leaves the walk host";
+        else {
+          try {
+            await page.goto(target.href, { waitUntil: "domcontentloaded" });
+          } catch {
+            error = "page did not load";
+          }
         }
         if (error === "" && i === 0 && new URL(page.url()).pathname === "/login") dead = true;
         if (error === "" && !dead) {
@@ -251,7 +258,7 @@ async function realWalk(
           }
         }
         if (error === "" && !dead) {
-          for (const click of shot.clicks) {
+          for (const click of clicks) {
             try {
               await page.locator(click).first().click({ timeout: CLICK_TIMEOUT_MS });
             } catch {
@@ -281,8 +288,9 @@ async function realWalk(
       } else if (error === "") {
         error = "clip not written";
       }
-      if (error !== "" && videoPath) {
-        rmSync(videoPath, { force: true });
+      if (error !== "") {
+        if (videoPath) rmSync(videoPath, { force: true });
+        rmSync(join(out, clipName(shot.n)), { force: true });
       }
       results.push(result(shot, route, only, error));
     }
@@ -377,6 +385,7 @@ async function main(): Promise<number> {
     console.log("session rejected");
     return 2;
   }
+  mkdirSync(out, { recursive: true });
   try {
     unlinkSync(sessionFile);
   } catch {
@@ -384,7 +393,6 @@ async function main(): Promise<number> {
     return 1;
   }
 
-  mkdirSync(out, { recursive: true });
   const { results, dead } = await realWalk(shots, routes, out, only, walkUrl, session);
   if (dead) {
     console.log("session rejected");

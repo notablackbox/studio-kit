@@ -255,3 +255,14 @@ test("a real walk with NABB_WALK_URL unset prints the line and exits 2, writing 
   assert.deepEqual(lines(result.stdout), ["NABB_WALK_URL is not set"]);
   assert.equal(existsSync(out), false);
 });
+
+test("npm run walk reaches the script: a dry run prints shot list ok", () => {
+  const { dir, file } = setup({ date: "2026-10-13", shots: [shot(1)] });
+  const result = spawnSync("npm", ["run", "--silent", "walk", "--", "--shotlist", file, "--dry-run"], {
+    cwd: kitRoot,
+    encoding: "utf8",
+    env: { ...process.env, INIT_CWD: dir },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /shot list ok: 1 shots/);
+});

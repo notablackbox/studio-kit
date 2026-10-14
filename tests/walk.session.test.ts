@@ -132,6 +132,7 @@ test("malformed sessions are rejected with exit 2", async () => {
     assert.equal(run.status, 2, `${JSON.stringify(session)}: ${run.output}`);
     assert.deepEqual(run.stdout.split("\n").filter(Boolean), ["session rejected"]);
     assert.deepEqual(webms(s.out), []);
+    assert.equal(existsSync(s.sessionFile), true, "a rejected session file is left as it is");
   }
 });
 
@@ -156,7 +157,9 @@ test("a live session: both cookies reach the server, the file is gone first, the
     assert.ok(server.seen.length > 0);
     assert.equal(server.seen[0].sessionFileExisted, false, "the file was still there at the first request");
     assert.equal(existsSync(s.sessionFile), false);
-    for (const request of server.seen.filter((r) => r.path === "/app/office" || r.path === "/app/jobs")) {
+    const pageRequests = server.seen.filter((r) => r.path === "/app/office" || r.path === "/app/jobs");
+    assert.equal(pageRequests.length, 2, "both shot pages were requested");
+    for (const request of pageRequests) {
       assert.match(request.cookie, new RegExp(`(^|; )access_token=${token}(;|$)`));
       assert.match(request.cookie, new RegExp(`(^|; )refresh_token=${token}(;|$)`));
     }
@@ -223,6 +226,39 @@ test("a first navigation that lands on /login: session rejected, exit 2, no clip
     assert.deepEqual(run.stdout.split("\n").filter(Boolean), ["session rejected"]);
     assert.deepEqual(webms(s.out), []);
     assert.equal(existsSync(join(s.out, "walk-report.json")), false);
+    assert.equal(run.output.includes(token), false);
+  } finally {
+    await server.close();
+  }
+});
+
+test("a real --only records the fallback path, says so, and merges into the report", async () => {
+  const token = randomUUID();
+  const s = setup({ accessToken: token, expiresAt: future() }, [shot(1, "/app/office"), shot(2, "/app/office")]);
+  const server = await startServer(s.sessionFile);
+  try {
+    const run = await new Promise<{ status: number | null; output: string }>((done) => {
+      const env: NodeJS.ProcessEnv = { ...process.env, HOME: s.home, INIT_CWD: s.home, NABB_WALK_URL: server.url };
+      const child = spawn(
+        process.execPath,
+        ["--import", "tsx", "src/walk.ts", "--shotlist", s.shotlist, "--out", s.out, "--only", "2"],
+        { cwd: kitRoot, env },
+      );
+      let output = "";
+      child.stdout.on("data", (c) => (output += c));
+      child.stderr.on("data", (c) => (output += c));
+      child.on("close", (status) => done({ status, output }));
+    });
+    assert.equal(run.status, 0, run.output);
+    const pages = server.seen.map((r) => r.path).filter((p) => p !== "/favicon.ico");
+    assert.deepEqual(pages, ["/app/office/methodology"]);
+    const report = JSON.parse(readFileSync(join(s.out, "walk-report.json"), "utf8"));
+    assert.equal(report.shots.length, 1);
+    assert.equal(report.shots[0].n, 2);
+    assert.equal(report.shots[0].route, "/app/office/methodology");
+    assert.equal(report.shots[0].usedFallback, true);
+    assert.equal(report.shots[0].status, "recorded");
+    assert.deepEqual(webms(s.out), ["shot-02.webm"]);
     assert.equal(run.output.includes(token), false);
   } finally {
     await server.close();
