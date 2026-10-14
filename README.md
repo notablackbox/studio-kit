@@ -135,7 +135,7 @@ The length refusal prints the sum, for example
 `script runs 38.4 seconds, want 45 to 60`. The rest of the shape is checked the
 same way: `date` a real `YYYY-MM-DD`; the opening's `headline` and `sub`, the
 proof's `line` and `source` and the closing's `line` not empty; each `caption`
-1 to 60 characters, so the lower third stays one line; each clip at least one
+1 to 60 characters, so the lower third takes at most two lines; each clip at least one
 second; `posterFrame` a whole frame inside the master.
 
 The length is the clips' `out` minus `in`, summed, plus the opening, proof and
@@ -169,7 +169,11 @@ Then, each a named step in `render-report.json`:
    and so does a reframe whose length is more than one frame off the master's.
 
 Each child process has a time limit (a render 15 minutes; ffmpeg, ffprobe and
-the still 5 minutes); running past it fails the step. The temp folder is
+the still 5 minutes); running past it fails the step. A child runs in a session
+of its own, and when it times out, fails or ends, the kit kills everything it
+started (Remotion's node process, Chromium in its own session, the compositor)
+and waits until none of it runs before the step reports, so nothing keeps
+burning CPU or writes into `--out` after a failure. The temp folder is
 removed at the end. On success `--out` holds the four outputs and nothing else;
 on failure it holds `render-report.json` alone, with `ok: false`, the failed
 step's `error`, empty `outputs`, and exit 1. The report is written once work
@@ -195,11 +199,12 @@ to 512 MB (its default is half the free memory, which ran a 6 GB box out of
 memory next to Chromium and the encoder).
 
 The film, in `src/remotion/`: an opening card (headline and sub), the clips with
-a one line lower third, a proof card (line and source), and a closing card with
+a lower third (one line, or two balanced lines when the caption is long; never
+cut short), a proof card (line and source), and a closing card with
 the stacked mark and wordmark, the closing line and the date (`13 October
 2026`). One 12 frame cross-fade between each. In the 4:5 reframe the type keeps
 the master's pixel sizes (headlines 72 to 112 px, the caption 48 px), and each
-clip and its caption are centred together as one block. Black ground, warm white type,
+clip and its caption (room for two lines) are centred together as one block. Black ground, warm white type,
 silver for the supporting lines, product green only as a thin rule and a dot;
 Inter Regular and SemiBold from `brand/fonts`, loaded before any frame is
 taken; colours from `brand/palette.json` only; the brand SVGs shown as they

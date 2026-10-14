@@ -1,8 +1,9 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -155,34 +156,187 @@ export function validateScript(raw: unknown, clipsDir: string): { script?: Tease
 }
 
 // The seam to the outside world: one child process, run to the end or to its time limit.
-export type Runner = (
-  command: string,
-  args: string[],
-  options: { cwd?: string; timeoutMs: number },
-) => { status: number | null; stdout: string; stderr: string; timedOut: boolean };
+// `failure` is set, in the kit's words, when the process could not be run or its output overran.
+export type RunResult = { status: number | null; stdout: string; stderr: string; timedOut: boolean; failure?: string };
+export type Runner = (command: string, args: string[], options: { cwd?: string; timeoutMs: number }) => Promise<RunResult>;
 
-const spawnRunner: Runner = (command, args, { cwd, timeoutMs }) => {
-  const result = spawnSync(command, args, {
-    cwd,
-    encoding: "utf8",
-    maxBuffer: 256 * 1024 * 1024,
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: timeoutMs,
-    killSignal: "SIGKILL",
+const OUTPUT_LIMIT = 16 * 1024 * 1024;
+const REAP_POLL_MS = 1000;
+const REAP_WAIT_MS = 10_000;
+
+type Proc = { pid: number; ppid: number; pgrp: number; sid: number; zombie: boolean };
+
+// Every process the system shows, from /proc; null where there is no /proc to read.
+function processes(): Proc[] | null {
+  let entries: string[];
+  try {
+    entries = readdirSync("/proc").filter((name) => /^\d+$/.test(name));
+  } catch {
+    return null;
+  }
+  const list: Proc[] = [];
+  for (const name of entries) {
+    try {
+      const stat = readFileSync(`/proc/${name}/stat`, "utf8");
+      // "pid (comm) state ppid pgrp session ...": comm may hold spaces and parentheses.
+      const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+      list.push({
+        pid: Number(name),
+        ppid: Number(fields[1]),
+        pgrp: Number(fields[2]),
+        sid: Number(fields[3]),
+        zombie: fields[0] === "Z" || fields[0] === "X",
+      });
+    } catch {
+      // Gone between the listing and the read.
+    }
+  }
+  return list;
+}
+
+// The child runs in a session of its own (spawn's `detached`). Remotion starts Chromium in a
+// session of its own too, so the kit keeps the set of sessions the child's descendants hold,
+// learnt while it runs, and kills by session as well as by descent: a process that outlives
+// its parent keeps its session.
+class Family {
+  readonly sessions = new Set<number>();
+  constructor(readonly root: number) {
+    this.sessions.add(root);
+  }
+
+  members(): number[] | null {
+    const all = processes();
+    if (!all) return null;
+    const live = all.filter((p) => !p.zombie);
+    const found = new Set<number>([this.root]);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const p of live) {
+        if (!found.has(p.pid) && (found.has(p.ppid) || this.sessions.has(p.sid))) {
+          found.add(p.pid);
+          grew = true;
+        }
+      }
+    }
+    const members = live.filter((p) => found.has(p.pid));
+    for (const p of members) this.sessions.add(p.sid);
+    return members.map((p) => p.pid);
+  }
+
+  killAll(): void {
+    const pids = this.members();
+    if (pids === null) {
+      // No /proc: the process group is the best the system offers.
+      try {
+        process.kill(-this.root, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+      return;
+    }
+    for (const pid of pids) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+    }
+  }
+
+  alive(): boolean {
+    const pids = this.members();
+    if (pids !== null) return pids.length > 0;
+    try {
+      process.kill(-this.root, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  // Kill everything the child left and wait until none of it runs, so nothing writes into
+  // --out after a step has reported.
+  async end(): Promise<boolean> {
+    const deadline = Date.now() + REAP_WAIT_MS;
+    for (;;) {
+      this.killAll();
+      if (!this.alive()) return true;
+      if (Date.now() > deadline) return false;
+      await new Promise((done) => setTimeout(done, 50));
+    }
+  }
+}
+
+export const runProcess: Runner = (command, args, { cwd, timeoutMs }) =>
+  new Promise<RunResult>((finish) => {
+    const out: Buffer[] = [];
+    const err: Buffer[] = [];
+    let size = 0;
+    let timedOut = false;
+    let failure: string | undefined;
+    let family: Family | undefined;
+    let settled = false;
+
+    const child = spawn(command, args, { cwd, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    if (child.pid !== undefined) family = new Family(child.pid);
+    const watch = setInterval(() => family?.members(), REAP_POLL_MS);
+    const timer = setTimeout(() => {
+      timedOut = true;
+      family?.killAll();
+    }, timeoutMs);
+
+    const keep = (into: Buffer[]) => (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > OUTPUT_LIMIT) {
+        if (!failure) failure = `${command} printed more than ${OUTPUT_LIMIT / 1024 / 1024} MB`;
+        family?.killAll();
+        return;
+      }
+      into.push(chunk);
+    };
+    child.stdout.on("data", keep(out));
+    child.stderr.on("data", keep(err));
+
+    const closed = new Promise<void>((done) => child.on("close", () => done()));
+    const settle = async (status: number | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearInterval(watch);
+      const gone = family ? await family.end() : true;
+      // With the family gone the pipes close; read what is left in them, but never hang on it.
+      let cap: NodeJS.Timeout | undefined;
+      await Promise.race([closed, new Promise((done) => (cap = setTimeout(done, 2000)))]);
+      clearTimeout(cap);
+      if (!gone && !failure && !timedOut) failure = `${command} left processes that would not stop`;
+      finish({
+        status,
+        stdout: Buffer.concat(out).toString("utf8"),
+        stderr: Buffer.concat(err).toString("utf8"),
+        timedOut,
+        failure,
+      });
+    };
+
+    child.on("error", (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT" || error.code === "EACCES") failure = `${command} could not be started`;
+      else failure = `${command} could not be run (${error.code ?? "unknown error"})`;
+      void settle(null);
+    });
+    // "exit", not "close": a descendant holding the pipes open must not keep the step waiting.
+    child.on("exit", (code) => void settle(code));
   });
-  const timedOut = (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT";
-  if (result.error && !timedOut) throw new StepFailed(`${command} could not be started`);
-  return { status: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "", timedOut };
-};
 
 // A step's failure, in the kit's own words.
 class StepFailed extends Error {}
 
 type Tools = { run: Runner; log: (line: string) => void };
 
-function call(tools: Tools, what: string, command: string, args: string[], timeoutMs: number, cwd?: string) {
-  const result = tools.run(command, args, { cwd, timeoutMs });
+async function call(tools: Tools, what: string, command: string, args: string[], timeoutMs: number, cwd?: string) {
+  const result = await tools.run(command, args, { cwd, timeoutMs });
   if (result.timedOut) throw new StepFailed(`${what} took longer than ${timeoutMs / MINUTE} minutes`);
+  if (result.failure) throw new StepFailed(result.failure);
   if (result.status !== 0) {
     // The tail of the tool's own output, on stderr only, for whoever reads the logs.
     const tail = `${result.stdout}\n${result.stderr}`.split("\n").filter((line) => line.trim() !== "").slice(-20);
@@ -194,8 +348,8 @@ function call(tools: Tools, what: string, command: string, args: string[], timeo
 
 type Probe = { width: number; height: number; fps: number; duration: number };
 
-function probe(tools: Tools, file: string): Probe {
-  const result = call(tools, `ffprobe of ${basename(file)}`, "ffprobe", [
+async function probe(tools: Tools, file: string): Promise<Probe> {
+  const result = await call(tools, `ffprobe of ${basename(file)}`, "ffprobe", [
     "-v", "error",
     "-select_streams", "v:0",
     "-show_entries", "stream=width,height,r_frame_rate:format=duration",
@@ -223,13 +377,13 @@ function probe(tools: Tools, file: string): Probe {
 // 512 MB holds well over a second of 1080p frames, all one clip ever looks back on.
 const FRAME_CACHE_BYTES = 512 * 1024 * 1024;
 
-function remotion(tools: Tools, args: string[], what: string, timeoutMs: number) {
+async function remotion(tools: Tools, args: string[], what: string, timeoutMs: number) {
   const flags = ["--log=error", `--offthreadvideo-cache-size-in-bytes=${FRAME_CACHE_BYTES}`];
-  call(tools, what, "npx", ["remotion", ...args, ...flags], timeoutMs, KIT_ROOT);
+  await call(tools, what, "npx", ["remotion", ...args, ...flags], timeoutMs, KIT_ROOT);
 }
 
-function measureVideo(tools: Tools, out: string, file: string, width: number, height: number): Video {
-  const p = probe(tools, join(out, file));
+async function measureVideo(tools: Tools, out: string, file: string, width: number, height: number): Promise<Video> {
+  const p = await probe(tools, join(out, file));
   if (p.width !== width || p.height !== height) {
     throw new StepFailed(`${file} measures ${p.width}x${p.height}, want ${width}x${height}`);
   }
@@ -244,15 +398,18 @@ const removeOutputs = (out: string) => {
 
 // The work after the gate. Writes render-report.json once it has started, on success and on
 // failure; a failed run leaves the report alone in --out, with no outputs listed.
-export function work(script: TeaserProps, clipsDir: string, out: string, seam: Partial<Tools> = {}): Report {
-  const tools: Tools = { run: seam.run ?? spawnRunner, log: seam.log ?? ((line) => console.error(line)) };
+export async function work(script: TeaserProps, clipsDir: string, out: string, seam: Partial<Tools> = {}): Promise<Report> {
+  const tools: Tools = { run: seam.run ?? runProcess, log: seam.log ?? ((line) => console.error(line)) };
   const used = [...new Set(script.clips.map((clip) => clip.file))];
   const report: Report = { ok: false, date: script.date, steps: [], outputs: {}, clips: used };
   let temp = "";
+  let publicDir = "";
+  let propsFile = "";
 
-  const step = (name: string, body: () => void): boolean => {
+  // Each step catches its own failure, so the chain below never throws.
+  const step = async (name: string, body: () => Promise<void>): Promise<boolean> => {
     try {
-      body();
+      await body();
       report.steps.push({ name, ok: true, error: "" });
       return true;
     } catch (error) {
@@ -263,69 +420,87 @@ export function work(script: TeaserProps, clipsDir: string, out: string, seam: P
     }
   };
 
+  const transcode = async () => {
+    removeOutputs(out);
+    try {
+      temp = mkdtempSync(join(tmpdir(), "studio-kit-render-"));
+      publicDir = join(temp, "public");
+      propsFile = join(temp, "props.json");
+      mkdirSync(publicDir);
+    } catch {
+      throw new StepFailed("the temp folder could not be made");
+    }
+    const names = new Map<string, string>();
+    used.forEach((file, i) => names.set(file, `clip-${String(i + 1).padStart(2, "0")}.mp4`));
+    for (const file of used) {
+      const target = join(publicDir, names.get(file)!);
+      const ffmpeg = await tools.run("ffmpeg", [
+        "-y", "-loglevel", "error",
+        "-i", join(clipsDir, file),
+        "-an",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+        "-pix_fmt", "yuv420p", "-r", String(FPS),
+        "-movflags", "+faststart",
+        target,
+      ], { timeoutMs: TOOL_TIMEOUT });
+      if (ffmpeg.timedOut) throw new StepFailed(`transcoding ${file} took longer than ${TOOL_TIMEOUT / MINUTE} minutes`);
+      if (ffmpeg.failure) throw new StepFailed(ffmpeg.failure);
+      if (ffmpeg.status !== 0) {
+        const tail = ffmpeg.stderr.split("\n").filter((line) => line.trim() !== "").slice(-20);
+        if (tail.length > 0) tools.log(tail.join("\n"));
+        throw new StepFailed(`${file} could not be transcoded`);
+      }
+      const length = (await probe(tools, target)).duration;
+      const latest = Math.max(...script.clips.filter((clip) => clip.file === file).map((clip) => clip.out));
+      if (!(length + 1 / FPS >= latest)) {
+        throw new StepFailed(`${file} runs ${length.toFixed(2)} seconds, a clip wants it to ${latest.toFixed(2)}`);
+      }
+    }
+    const props: TeaserProps = {
+      ...script,
+      clips: script.clips.map((clip) => ({ ...clip, file: names.get(clip.file)! })),
+    };
+    writeFileSync(propsFile, JSON.stringify(props));
+  };
+
+  const measure = async () => {
+    const teaser = await measureVideo(tools, out, OUTPUTS.teaser, 1920, 1080);
+    const teaser4x5 = await measureVideo(tools, out, OUTPUTS.teaser4x5, 1080, 1350);
+    const still = await probe(tools, join(out, OUTPUTS.poster));
+    if (still.width !== 1920 || still.height !== 1080) {
+      throw new StepFailed(`${OUTPUTS.poster} measures ${still.width}x${still.height}, want 1920x1080`);
+    }
+    if (teaser.durationSeconds < MIN_SECONDS || teaser.durationSeconds > MAX_SECONDS) {
+      const shown = shownOutside(teaser.durationSeconds, MIN_SECONDS, MAX_SECONDS);
+      throw new StepFailed(`teaser.mp4 runs ${shown} seconds, want ${MIN_SECONDS} to ${MAX_SECONDS}`);
+    }
+    if (Math.abs(teaser4x5.durationSeconds - teaser.durationSeconds) > 1 / FPS + 0.005) {
+      throw new StepFailed(`teaser-4x5.mp4 runs ${teaser4x5.durationSeconds} seconds, the master ${teaser.durationSeconds}`);
+    }
+    report.outputs = { teaser, teaser4x5, poster: { file: OUTPUTS.poster, width: still.width, height: still.height } };
+  };
+
   mkdirSync(out, { recursive: true });
   try {
-    let publicDir = "";
-    let propsFile = "";
     report.ok =
-      step("transcode", () => {
-        removeOutputs(out);
-        try {
-          temp = mkdtempSync(join(tmpdir(), "studio-kit-render-"));
-          publicDir = join(temp, "public");
-          propsFile = join(temp, "props.json");
-          mkdirSync(publicDir);
-        } catch {
-          throw new StepFailed("the temp folder could not be made");
-        }
-        const names = new Map<string, string>();
-        used.forEach((file, i) => names.set(file, `clip-${String(i + 1).padStart(2, "0")}.mp4`));
-        for (const file of used) {
-          const target = join(publicDir, names.get(file)!);
-          const ffmpeg = tools.run("ffmpeg", [
-            "-y", "-loglevel", "error",
-            "-i", join(clipsDir, file),
-            "-an",
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
-            "-pix_fmt", "yuv420p", "-r", String(FPS),
-            "-movflags", "+faststart",
-            target,
-          ], { timeoutMs: TOOL_TIMEOUT });
-          if (ffmpeg.timedOut) throw new StepFailed(`transcoding ${file} took longer than ${TOOL_TIMEOUT / MINUTE} minutes`);
-          if (ffmpeg.status !== 0) {
-            const tail = ffmpeg.stderr.split("\n").filter((line) => line.trim() !== "").slice(-20);
-            if (tail.length > 0) tools.log(tail.join("\n"));
-            throw new StepFailed(`${file} could not be transcoded`);
-          }
-          const length = probe(tools, target).duration;
-          const latest = Math.max(...script.clips.filter((clip) => clip.file === file).map((clip) => clip.out));
-          if (!(length + 1 / FPS >= latest)) {
-            throw new StepFailed(`${file} runs ${length.toFixed(2)} seconds, a clip wants it to ${latest.toFixed(2)}`);
-          }
-        }
-        const props: TeaserProps = {
-          ...script,
-          clips: script.clips.map((clip) => ({ ...clip, file: names.get(clip.file)! })),
-        };
-        writeFileSync(propsFile, JSON.stringify(props));
-      }) &&
-      step("render-teaser", () => {
+      (await step("transcode", transcode)) &&
+      (await step("render-teaser", () =>
         remotion(
           tools,
           ["render", ENTRY, "Teaser", join(out, OUTPUTS.teaser), `--props=${propsFile}`, `--public-dir=${publicDir}`],
           "rendering Teaser",
           RENDER_TIMEOUT,
-        );
-      }) &&
-      step("render-teaser-4x5", () => {
+        ),
+      )) &&
+      (await step("render-teaser-4x5", () =>
         remotion(
           tools,
           ["render", ENTRY, "TeaserSocial", join(out, OUTPUTS.teaser4x5), `--props=${propsFile}`, `--public-dir=${publicDir}`],
           "rendering TeaserSocial",
           RENDER_TIMEOUT,
-        );
-      }) &&
-      step("still-poster", () => {
+        ),
+      )) &&
+      (await step("still-poster", () =>
         remotion(
           tools,
           [
@@ -334,29 +509,12 @@ export function work(script: TeaserProps, clipsDir: string, out: string, seam: P
           ],
           "rendering the poster still",
           TOOL_TIMEOUT,
-        );
-      }) &&
-      step("measure", () => {
-        const teaser = measureVideo(tools, out, OUTPUTS.teaser, 1920, 1080);
-        const teaser4x5 = measureVideo(tools, out, OUTPUTS.teaser4x5, 1080, 1350);
-        const still = probe(tools, join(out, OUTPUTS.poster));
-        if (still.width !== 1920 || still.height !== 1080) {
-          throw new StepFailed(`${OUTPUTS.poster} measures ${still.width}x${still.height}, want 1920x1080`);
-        }
-        if (teaser.durationSeconds < MIN_SECONDS || teaser.durationSeconds > MAX_SECONDS) {
-          const shown = shownOutside(teaser.durationSeconds, MIN_SECONDS, MAX_SECONDS);
-          throw new StepFailed(`teaser.mp4 runs ${shown} seconds, want ${MIN_SECONDS} to ${MAX_SECONDS}`);
-        }
-        if (Math.abs(teaser4x5.durationSeconds - teaser.durationSeconds) > 1 / FPS + 0.005) {
-          throw new StepFailed(
-            `teaser-4x5.mp4 runs ${teaser4x5.durationSeconds} seconds, the master ${teaser.durationSeconds}`,
-          );
-        }
-        report.outputs = { teaser, teaser4x5, poster: { file: OUTPUTS.poster, width: still.width, height: still.height } };
-      });
-  } catch {
-    report.ok = false;
+        ),
+      )) &&
+      (await step("measure", measure));
   } finally {
+    // Every child process of a step has ended (runProcess waits for its whole family), so
+    // nothing writes into --out or the temp folder after this cleanup.
     if (temp) rmSync(temp, { recursive: true, force: true });
     if (!report.ok) {
       removeOutputs(out);
@@ -367,7 +525,7 @@ export function work(script: TeaserProps, clipsDir: string, out: string, seam: P
   return report;
 }
 
-function main(): number {
+async function main(): Promise<number> {
   let values: { script?: string; clips?: string; out?: string };
   try {
     values = parseArgs({
@@ -402,7 +560,7 @@ function main(): number {
     return 2;
   }
 
-  const report = work(script, clipsDir, out);
+  const report = await work(script, clipsDir, out);
   return report.ok ? 0 : 1;
 }
 
@@ -415,10 +573,14 @@ const isMain = (() => {
 })();
 
 if (isMain) {
-  try {
-    process.exitCode = main();
-  } catch {
-    console.error("render: unexpected failure");
-    process.exitCode = 1;
-  }
+  main().then(
+    (code) => {
+      process.exitCode = code;
+    },
+    () => {
+      // --out could not be made, or the report could not be written.
+      console.error("render: unexpected failure");
+      process.exitCode = 1;
+    },
+  );
 }

@@ -15,7 +15,7 @@ import {
   teaserFrames,
   type TeaserProps,
 } from "../src/remotion/Teaser.tsx";
-import { work, type Runner } from "../src/render.ts";
+import { runProcess, work, type Runner } from "../src/render.ts";
 
 const kitRoot = fileURLToPath(new URL("..", import.meta.url));
 
@@ -272,7 +272,7 @@ type Fake = {
 };
 
 function fakeRunner(fake: Fake, seen: { temp: string }): Runner {
-  return (command, args) => {
+  return async (command, args) => {
     const ok = { status: 0, stdout: "", stderr: "", timedOut: false };
     const target = args[args.length - 1];
     if (command === "ffmpeg") {
@@ -302,25 +302,25 @@ const goodMeasures = {
   "poster.png": { duration: NaN, width: 1920, height: 1080 },
 };
 
-function runWork(fake: Fake) {
+async function runWork(fake: Fake) {
   const ws = workspace(["shot-01.webm", "shot-02.webm", "shot-03.webm"]);
   const seen = { temp: "" };
   const script = cutScript(clipsCut(15)) as unknown as TeaserProps;
-  const report = work(script, ws.clips, ws.out, { run: fakeRunner(fake, seen), log: () => {} });
+  const report = await work(script, ws.clips, ws.out, { run: fakeRunner(fake, seen), log: () => {} });
   assert.ok(seen.temp, "the transcode wrote into a temp folder");
   assert.equal(existsSync(seen.temp), false, "the temp folder is removed");
   return { ws, report, files: readdirSync(ws.out).sort() };
 }
 
-test("seam check: with every step passing, work leaves the four outputs and a full report", () => {
-  const { report, files } = runWork({ measures: goodMeasures });
+test("seam check: with every step passing, work leaves the four outputs and a full report", async () => {
+  const { report, files } = await runWork({ measures: goodMeasures });
   assert.equal(report.ok, true);
   assert.deepEqual(files, ["poster.png", "render-report.json", "teaser-4x5.mp4", "teaser.mp4"]);
   assert.equal(report.outputs.teaser?.durationSeconds, 53);
 });
 
-test("a failure after render-teaser leaves only render-report.json, with no outputs", () => {
-  const { report, files, ws } = runWork({
+test("a failure after render-teaser leaves only render-report.json, with no outputs", async () => {
+  const { report, files, ws } = await runWork({
     measures: goodMeasures,
     failOn: (args) => (args.includes("TeaserSocial") ? "fail" : undefined),
   });
@@ -336,8 +336,8 @@ test("a failure after render-teaser leaves only render-report.json, with no outp
   assert.match(written.steps[2].error, /TeaserSocial/);
 });
 
-test("a step that runs past its time limit fails in the kit's words", () => {
-  const { report, files } = runWork({
+test("a step that runs past its time limit fails in the kit's words", async () => {
+  const { report, files } = await runWork({
     measures: goodMeasures,
     failOn: (args) => (args.includes("Teaser") && args[1] === "render" ? "timeout" : undefined),
   });
@@ -346,8 +346,8 @@ test("a step that runs past its time limit fails in the kit's words", () => {
   assert.match(report.steps[1].error, /took longer than 15 minutes/);
 });
 
-test("measure fails a reframe whose length is off the master by more than a frame, and removes the outputs", () => {
-  const { report, files } = runWork({
+test("measure fails a reframe whose length is off the master by more than a frame, and removes the outputs", async () => {
+  const { report, files } = await runWork({
     measures: { ...goodMeasures, "teaser-4x5.mp4": { duration: 52.9, width: 1080, height: 1350 } },
   });
   assert.deepEqual(files, ["render-report.json"]);
@@ -358,8 +358,8 @@ test("measure fails a reframe whose length is off the master by more than a fram
   assert.match(last.error, /teaser-4x5\.mp4/);
 });
 
-test("measure fails a master outside 45 to 60, and removes the outputs", () => {
-  const { report, files } = runWork({
+test("measure fails a master outside 45 to 60, and removes the outputs", async () => {
+  const { report, files } = await runWork({
     measures: {
       ...goodMeasures,
       "teaser.mp4": { duration: 44.5, width: 1920, height: 1080 },
@@ -368,6 +368,69 @@ test("measure fails a master outside 45 to 60, and removes the outputs", () => {
   });
   assert.deepEqual(files, ["render-report.json"]);
   assert.match(report.steps[report.steps.length - 1].error, /teaser\.mp4 runs 44\.5 seconds, want 45 to 60/);
+});
+
+// Real processes, no render: a child that leaves descendants behind, one of them in a session
+// of its own as Remotion's Chromium is.
+function running(pid: number): boolean {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const state = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0];
+    return state !== "Z" && state !== "X";
+  } catch {
+    return false;
+  }
+}
+
+function leaver(dir: string): string[] {
+  return [
+    "-c",
+    `sleep 30 & echo $! > ${dir}/bg.pid; ` +
+      `setsid sh -c 'echo $$ > ${dir}/own.pid; sleep 2; touch ${dir}/late' & ` +
+      "sleep 30",
+  ];
+}
+
+const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
+
+test("a timed-out process is killed with every descendant before the call returns", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "studio-kit-reap-"));
+  const started = Date.now();
+  const result = await runProcess("sh", leaver(dir), { timeoutMs: 600 });
+  assert.equal(result.timedOut, true);
+  assert.ok(Date.now() - started < 10_000);
+  const pids = ["bg.pid", "own.pid"].map((name) => Number(readFileSync(join(dir, name), "utf8").trim()));
+  for (const pid of pids) assert.equal(running(pid), false, `pid ${pid} survived`);
+  await sleep(2500);
+  assert.equal(existsSync(join(dir, "late")), false, "a descendant wrote after the call returned");
+});
+
+test("a render step past its time limit fails in the kit's words and leaves nothing running", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "studio-kit-reap-"));
+  const fake = fakeRunner({ measures: goodMeasures }, { temp: "" });
+  const ws = workspace(["shot-01.webm", "shot-02.webm", "shot-03.webm"]);
+  const run: Runner = (command, args, options) =>
+    command === "npx" ? runProcess("sh", leaver(dir), { cwd: options.cwd, timeoutMs: 600 }) : fake(command, args, options);
+  const report = await work(cutScript(clipsCut(15)) as unknown as TeaserProps, ws.clips, ws.out, { run, log: () => {} });
+  assert.equal(report.ok, false);
+  assert.equal(report.steps[1].name, "render-teaser");
+  assert.match(report.steps[1].error, /^rendering Teaser took longer than 15 minutes$/);
+  assert.deepEqual(readdirSync(ws.out), ["render-report.json"]);
+  for (const name of ["bg.pid", "own.pid"]) {
+    const pid = Number(readFileSync(join(dir, name), "utf8").trim());
+    assert.equal(running(pid), false, `${name} ${pid} survived`);
+  }
+  await sleep(2500);
+  assert.equal(existsSync(join(dir, "late")), false);
+});
+
+test("a tool that cannot start, or that prints too much, fails in its own words", async () => {
+  const missing = await runProcess("studio-kit-no-such-tool", [], { timeoutMs: 5000 });
+  assert.equal(missing.failure, "studio-kit-no-such-tool could not be started");
+  const loud = await runProcess("sh", ["-c", "head -c 20000000 /dev/zero"], { timeoutMs: 30_000 });
+  assert.equal(loud.failure, "sh printed more than 16 MB");
+  const fine = await runProcess("sh", ["-c", "echo out; echo err >&2; exit 3"], { timeoutMs: 5000 });
+  assert.deepEqual(fine, { status: 3, stdout: "out\n", stderr: "err\n", timedOut: false, failure: undefined });
 });
 
 test(
