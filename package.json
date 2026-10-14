@@ -1,0 +1,23 @@
+{
+  "name": "studio-kit",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "engines": { "node": ">=20.6" },
+  "scripts": {
+    "walk": "tsx src/walk.ts",
+    "render": "tsx src/render.ts",
+    "changelog": "tsx src/changelog.ts",
+    "test": "node --import tsx --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.535",
+    "@remotion/transitions": "4.0.535",
+    "playwright": "1.63.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "remotion": "4.0.535",
+    "tsx": "4.23.15"
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "black": { "hex": "#0a0a0a", "source": "the logo ink, public/icons/nabb-mark.svg" },
+  "warmWhite": { "hex": "#f5f5f7", "source": "--surface-2, src/app/globals.css" },
+  "graphite": { "hex": "#2c2c2e", "source": "dark --surface-1, src/app/globals.css" },
+  "silver": { "hex": "#e7e7ec", "source": "--rail, src/app/globals.css" },
+  "productGreen": { "hex": "#34c759", "source": "--sage-brand, src/app/globals.css" }
+}
