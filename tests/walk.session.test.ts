@@ -232,9 +232,9 @@ test("a first navigation that lands on /login: session rejected, exit 2, no clip
   }
 });
 
-test("a real --only records the fallback path, says so, and merges into the report", async () => {
+test("a real --only records the fallback path, says so, and writes a fresh report", async () => {
   const token = randomUUID();
-  const s = setup({ accessToken: token, expiresAt: future() }, [shot(1, "/app/office"), shot(2, "/app/office")]);
+  const s = setup({ accessToken: token, expiresAt: future() }, [shot(1, "/app/home"), shot(2, "/app/home")]);
   const server = await startServer(s.sessionFile);
   try {
     const run = await new Promise<{ status: number | null; output: string }>((done) => {
@@ -250,12 +250,14 @@ test("a real --only records the fallback path, says so, and merges into the repo
       child.on("close", (status) => done({ status, output }));
     });
     assert.equal(run.status, 0, run.output);
+    // Home's primary settle (the Focus or board view group) is not in the served page,
+    // so only the fallback rule (body) lets this shot record.
     const pages = server.seen.map((r) => r.path).filter((p) => p !== "/favicon.ico");
-    assert.deepEqual(pages, ["/app/office/methodology"]);
+    assert.deepEqual(pages, ["/"]);
     const report = JSON.parse(readFileSync(join(s.out, "walk-report.json"), "utf8"));
     assert.equal(report.shots.length, 1);
     assert.equal(report.shots[0].n, 2);
-    assert.equal(report.shots[0].route, "/app/office/methodology");
+    assert.equal(report.shots[0].route, "/");
     assert.equal(report.shots[0].usedFallback, true);
     assert.equal(report.shots[0].status, "recorded");
     assert.deepEqual(webms(s.out), ["shot-02.webm"]);
