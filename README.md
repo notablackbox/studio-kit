@@ -86,8 +86,10 @@ A shot list (`shotlist.json`) holds a `date` and one to twelve `shots`, each
 with `n`, `surface`, `route`, `dwell` (3 to 20 seconds), `clicks` and `caption`
 (1 to 60 characters). It is refused when it has no shot or more than 12, when an
 `n` repeats, when a `route` is neither a `route` nor a `fallback` in
-`routes.json`, when a `clicks` entry is not listed for that route, or when a
-caption is empty or too long. A selector the kit does not list is never
+`routes.json`, when a `clicks` entry is not listed for that route, when a
+`surface` is not the `surface` of the `routes.json` entry that owns the shot's
+`route`, or when a caption is empty or over 60 characters (counted as Unicode
+characters, not UTF-16 units). A selector the kit does not list is never
 clicked.
 
 `routes.json` lists the screens the walk may open: `surface`, `route`, `settle`
@@ -98,7 +100,7 @@ are to be verified in a browser on the day the kit is pinned.
 
 A real walk, in order:
 
-1. Reads `NABB_WALK_URL`. Missing: prints `NABB_WALK_URL is not set`, exits 2.
+1. Reads `NABB_WALK_URL`. Missing: prints `NABB_WALK_URL is not set`, exits 2. Not an `http:` or `https:` URL: prints `NABB_WALK_URL is not a URL`, exits 2, and leaves the session file in place.
 2. Reads `$HOME/.studio/walk-session`, JSON `{"accessToken": "...", "expiresAt": <epoch seconds>}`. Absent, unparsable, missing a key or expired: prints `session rejected`, exits 2, writes no clip.
 3. Deletes the session file, then launches Chromium. The token lives in memory only.
 4. For each shot, a fresh context with a 1920x1080 viewport and a 1920x1080 video.
@@ -107,9 +109,13 @@ A real walk, in order:
 7. A first navigation that lands on `/login` means the session is dead: prints `session rejected`, deletes any clip, exits 2.
 8. A shot that fails is marked failed in the report and the walk goes on. The exit code is still 0: the report is the answer.
 
+Every main-frame navigation, across redirects and for the whole life of a shot, is held to the walk URL's origin: one that leaves it is aborted and the shot fails with `route leaves the walk host`. Sub-resource requests to other origins are not touched.
+
 `walk-report.json` holds `date`, `synthetic`, a `shots` list (`n`, `surface`,
 `route`, `ok`, `file`, `seconds`, `status` of `recorded` or `failed`, `error`,
-`usedFallback`), and the counts `recorded` and `failed`.
+`usedFallback`), and the counts `recorded` and `failed`. `route` is the path
+opened. `usedFallback` is true when that path is a fallback: under `--only`, or
+when the shot names a path that is some entry's `fallback` and no entry's `route`.
 
 ## `render`
 

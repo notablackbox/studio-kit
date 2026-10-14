@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
-import type { Browser, BrowserContext } from "playwright";
+import type { Browser, BrowserContext, Page } from "playwright";
 
 // Exit codes: 0 done and report written, 2 refused before any work, 1 anything unexpected.
 // Lines the skills read ("shot list ok", "session rejected", ...) go to stdout.
@@ -40,6 +40,14 @@ function ownerOf(routes: Route[], path: string): Route | undefined {
   return routes.find((r) => r.route === path) ?? routes.find((r) => r.fallback === path);
 }
 
+// The page opened for a shot, and whether it is a fallback path: --only, or a route that
+// is some entry's fallback and no entry's route.
+function pageFor(routes: Route[], shot: Shot, only: boolean): { route: string; usedFallback: boolean } {
+  const route = only ? ownerOf(routes, shot.route)!.fallback : shot.route;
+  const usedFallback = only || (routes.some((r) => r.fallback === route) && !routes.some((r) => r.route === route));
+  return { route, usedFallback };
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -68,7 +76,7 @@ export function validateShotList(raw: unknown, routes: Route[]): { list?: ShotLi
     if (typeof entry.dwell !== "number" || !Number.isFinite(entry.dwell) || entry.dwell < 3 || entry.dwell > 20) {
       problems.push(`${label}: dwell must be a number from 3 to 20`);
     }
-    if (typeof entry.caption !== "string" || entry.caption === "" || entry.caption.length > 60) {
+    if (typeof entry.caption !== "string" || entry.caption === "" || [...entry.caption].length > 60) {
       problems.push(`${label}: caption must be 1 to 60 characters`);
     }
 
@@ -77,6 +85,9 @@ export function validateShotList(raw: unknown, routes: Route[]): { list?: ShotLi
     else {
       owner = ownerOf(routes, entry.route);
       if (!owner) problems.push(`${label}: route ${entry.route} is not in routes.json`);
+      else if (typeof entry.surface === "string" && entry.surface !== owner.surface) {
+        problems.push(`${label}: surface ${entry.surface} does not match ${owner.surface} for route ${entry.route}`);
+      }
     }
 
     if (!Array.isArray(entry.clicks) || entry.clicks.some((c) => typeof c !== "string")) {
@@ -157,7 +168,7 @@ function result(shot: Shot, route: string, usedFallback: boolean, error: string)
 function synthetic(shots: Shot[], routes: Route[], out: string, only: boolean): ShotResult[] {
   const results: ShotResult[] = [];
   for (const shot of shots) {
-    const route = only ? ownerOf(routes, shot.route)!.fallback : shot.route;
+    const { route, usedFallback } = pageFor(routes, shot, only);
     const file = join(out, clipName(shot.n));
     const ffmpeg = spawnSync(
       "ffmpeg",
@@ -174,9 +185,9 @@ function synthetic(shots: Shot[], routes: Route[], out: string, only: boolean): 
     if (ffmpeg.error) throw new Error("ffmpeg could not be started");
     if (ffmpeg.status !== 0) {
       rmSync(file, { force: true });
-      results.push(result(shot, route, only, "clip not written"));
+      results.push(result(shot, route, usedFallback, "clip not written"));
     } else {
-      results.push(result(shot, route, only, ""));
+      results.push(result(shot, route, usedFallback, ""));
     }
   }
   return results;
@@ -199,6 +210,42 @@ function readSession(file: string): Session | null {
   return { accessToken, expiresAt };
 }
 
+const guarded = new WeakMap<Page, Promise<void>>();
+
+// Fails every top-level document request of the page whose origin is not the walk origin.
+// This is done on the DevTools Fetch domain because context.route does not see the hops
+// of a redirect chain: the browser would ask the other host before any handler ran.
+// Sub-resources and frames other than the top one are not touched.
+function holdToHost(context: BrowserContext, page: Page, origin: string, onBlocked: () => void): Promise<void> {
+  const known = guarded.get(page);
+  if (known) return known;
+  const done = attachHold(context, page, origin, onBlocked);
+  guarded.set(page, done);
+  return done;
+}
+
+async function attachHold(context: BrowserContext, page: Page, origin: string, onBlocked: () => void): Promise<void> {
+  const cdp = await context.newCDPSession(page);
+  const mainFrameId = (await cdp.send("Page.getFrameTree")).frameTree.frame.id;
+  cdp.on("Fetch.requestPaused", (event) => {
+    let outside = event.frameId === mainFrameId;
+    if (outside) {
+      try {
+        outside = new URL(event.request.url).origin !== origin;
+      } catch {
+        outside = true;
+      }
+    }
+    if (outside) {
+      onBlocked();
+      cdp.send("Fetch.failRequest", { requestId: event.requestId, errorReason: "BlockedByClient" }).catch(() => {});
+    } else {
+      cdp.send("Fetch.continueRequest", { requestId: event.requestId }).catch(() => {});
+    }
+  });
+  await cdp.send("Fetch.enable", { patterns: [{ urlPattern: "*", resourceType: "Document", requestStage: "Request" }] });
+}
+
 async function realWalk(
   shots: Shot[],
   routes: Route[],
@@ -214,15 +261,15 @@ async function realWalk(
   try {
     for (let i = 0; i < shots.length; i++) {
       const shot = shots[i];
-      const route = only ? ownerOf(routes, shot.route)!.fallback : shot.route;
+      const { route, usedFallback } = pageFor(routes, shot, only);
       // On a fallback page, settle on the entry whose route is that path, else body, and click nothing.
-      const fallbackPage = only || !routes.some((r) => r.route === route);
       const settle = routes.find((r) => r.route === route)?.settle ?? "body";
-      const clicks = fallbackPage ? [] : shot.clicks;
+      const clicks = usedFallback ? [] : shot.clicks;
       const context = await newRecordingContext(browser, out);
       let videoPath = "";
       let error = "";
       let dead = false;
+      let leftHost = false;
       try {
         const cookie = (name: string) => ({
           name,
@@ -235,7 +282,16 @@ async function realWalk(
           expires: session.expiresAt,
         });
         await context.addCookies([cookie("access_token"), cookie("refresh_token")]);
+        const guard = async (p: Page) => {
+          await holdToHost(context, p, walkUrl.origin, () => {
+            leftHost = true;
+          });
+        };
+        context.on("page", (p) => {
+          guard(p).catch(() => {});
+        });
         const page = await context.newPage();
+        await guard(page);
         const video = page.video();
         if (video) videoPath = await video.path();
         if (videoPath) written.push(videoPath);
@@ -246,9 +302,10 @@ async function realWalk(
           try {
             await page.goto(target.href, { waitUntil: "domcontentloaded" });
           } catch {
-            error = "page did not load";
+            error = leftHost ? "route leaves the walk host" : "page did not load";
           }
         }
+        if (leftHost && error !== "") error = "route leaves the walk host";
         if (error === "" && i === 0 && new URL(page.url()).pathname === "/login") dead = true;
         if (error === "" && !dead) {
           try {
@@ -268,6 +325,7 @@ async function realWalk(
           }
         }
         if (error === "" && !dead) await page.waitForTimeout(shot.dwell * 1000);
+        if (leftHost && !dead) error = "route leaves the walk host";
       } catch {
         if (error === "") error = "shot failed";
       } finally {
@@ -292,7 +350,7 @@ async function realWalk(
         if (videoPath) rmSync(videoPath, { force: true });
         rmSync(join(out, clipName(shot.n)), { force: true });
       }
-      results.push(result(shot, route, only, error));
+      results.push(result(shot, route, usedFallback, error));
     }
   } finally {
     await browser.close().catch(() => {});
@@ -375,6 +433,7 @@ async function main(): Promise<number> {
   let walkUrl: URL;
   try {
     walkUrl = new URL(rawUrl);
+    if (walkUrl.protocol !== "http:" && walkUrl.protocol !== "https:") throw new Error("scheme");
   } catch {
     console.log("NABB_WALK_URL is not a URL");
     return 2;

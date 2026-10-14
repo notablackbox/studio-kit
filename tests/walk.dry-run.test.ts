@@ -10,11 +10,21 @@ const kitRoot = fileURLToPath(new URL("..", import.meta.url));
 
 type Shot = Record<string, unknown>;
 
+const SURFACES: Record<string, string> = {
+  "/app/office": "Office",
+  "/app/office/methodology": "Office",
+  "/app/jobs": "Hiring",
+  "/app/campaigns": "Hiring",
+  "/app/home": "Home",
+  "/": "Home",
+};
+
 function shot(n: number, overrides: Shot = {}): Shot {
+  const route = String(overrides.route ?? "/app/office");
   return {
     n,
-    surface: "Office",
-    route: "/app/office",
+    surface: SURFACES[route] ?? "Office",
+    route,
     dwell: 3,
     clicks: [],
     caption: "The run now shows its receipt",
@@ -194,7 +204,7 @@ test("--synthetic writes one 1920x1080 30 fps webm per shot and a report, with n
   assert.equal(report.failed, 0);
   assert.deepEqual(report.shots[1], {
     n: 2,
-    surface: "Office",
+    surface: "Hiring",
     route: "/app/jobs",
     ok: true,
     file: "shot-02.webm",
@@ -265,4 +275,62 @@ test("npm run walk reaches the script: a dry run prints shot list ok", () => {
   });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /shot list ok: 1 shots/);
+});
+
+test("a surface that is not the owning entry's surface is refused, naming the shot and both surfaces", () => {
+  const { result } = dryRun({ date: "2026-10-13", shots: [shot(1), shot(2, { route: "/app/jobs", surface: "Office" })] });
+  assert.equal(result.status, 2);
+  const problems = lines(result.stdout);
+  assert.equal(problems.length, 1, result.stdout);
+  assert.match(problems[0], /shot 2/);
+  assert.match(problems[0], /Office/);
+  assert.match(problems[0], /Hiring/);
+  const fallback = dryRun({ date: "2026-10-13", shots: [shot(1, { route: "/app/campaigns", surface: "Home" })] });
+  assert.equal(fallback.result.status, 2, "a fallback route is held to its owner's surface too");
+});
+
+test("caption length counts code points: 31 and 60 astral characters pass, 61 are refused", () => {
+  const astral = (count: number) => "\u{1F600}".repeat(count);
+  assert.equal(astral(31).length, 62);
+  const ok = dryRun({ date: "2026-10-13", shots: [shot(1, { caption: astral(31) })] });
+  assert.equal(ok.result.status, 0, ok.output);
+  const edge = dryRun({ date: "2026-10-13", shots: [shot(1, { caption: astral(60) })] });
+  assert.equal(edge.result.status, 0, edge.output);
+  const over = dryRun({ date: "2026-10-13", shots: [shot(1, { caption: astral(61) })] });
+  assert.equal(over.result.status, 2);
+});
+
+test("--synthetic with a shot that names a fallback route directly sets usedFallback", () => {
+  const { dir, file } = setup({
+    date: "2026-10-13",
+    shots: [shot(1, { route: "/app/office/methodology" }), shot(2, { route: "/app/jobs" })],
+  });
+  const out = join(dir, "out");
+  const { result, output } = walk(["--shotlist", file, "--out", out, "--synthetic"], dir);
+  assert.equal(result.status, 0, output);
+  const report = JSON.parse(readFileSync(join(out, "walk-report.json"), "utf8"));
+  assert.equal(report.shots[0].route, "/app/office/methodology");
+  assert.equal(report.shots[0].usedFallback, true);
+  assert.equal(report.shots[1].usedFallback, false);
+});
+
+test("NABB_WALK_URL that is not http or https is refused as not a URL, session file untouched", () => {
+  for (const url of ["javascript:alert(1)", "file:///tmp"]) {
+    const { dir, file } = setup({ date: "2026-10-13", shots: [shot(1)] });
+    mkdirSync(join(dir, ".studio"));
+    const sessionFile = join(dir, ".studio", "walk-session");
+    writeFileSync(sessionFile, JSON.stringify({ accessToken: "t", expiresAt: Math.floor(Date.now() / 1000) + 3600 }));
+    const out = join(dir, "out");
+    const result = spawnSync(process.execPath, ["--import", "tsx", "src/walk.ts", "--shotlist", file, "--out", out], {
+      cwd: kitRoot,
+      encoding: "utf8",
+      env: { ...process.env, INIT_CWD: dir, HOME: dir, NABB_WALK_URL: url },
+    });
+    const all = `${result.stdout}${result.stderr}`;
+    assert.equal(result.status, 2, `${url}: ${all}`);
+    assert.deepEqual(lines(result.stdout), ["NABB_WALK_URL is not a URL"]);
+    assert.equal(all.includes(url), false);
+    assert.equal(existsSync(sessionFile), true);
+    assert.equal(existsSync(out), false);
+  }
 });

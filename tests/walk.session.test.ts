@@ -56,8 +56,10 @@ function setup(session: unknown, shots: unknown[]) {
   return { home, sessionFile, shotlist, out: join(home, "out") };
 }
 
+const SURFACES: Record<string, string> = { "/app/jobs": "Hiring", "/app/home": "Home", "/": "Home", "/app/campaigns": "Hiring" };
+
 function shot(n: number, route: string) {
-  return { n, surface: "Office", route, dwell: 3, clicks: [], caption: "A caption" };
+  return { n, surface: SURFACES[route] ?? "Office", route, dwell: 3, clicks: [], caption: "A caption" };
 }
 
 function runWalk(home: string, shotlist: string, out: string, url?: string) {
@@ -262,6 +264,58 @@ test("a real --only records the fallback path, says so, and writes a fresh repor
     assert.equal(report.shots[0].status, "recorded");
     assert.deepEqual(webms(s.out), ["shot-02.webm"]);
     assert.equal(run.output.includes(token), false);
+  } finally {
+    await server.close();
+  }
+});
+
+test("a listed route that redirects to another origin: the other host is never asked, the shot fails, exit 0", async () => {
+  const token = randomUUID();
+  const s = setup({ accessToken: token, expiresAt: future() }, [shot(1, "/app/office"), shot(2, "/app/jobs")]);
+  const other = await startServer(s.sessionFile);
+  // The walk host sends /app/office to the other server: a different port is a different origin.
+  const host = createServer((req, res) => {
+    const path = (req.url ?? "/").split("?")[0];
+    if (path === "/app/office") {
+      res.statusCode = 302;
+      res.setHeader("location", `${other.url}/landed`);
+      res.end();
+      return;
+    }
+    res.setHeader("content-type", "text/html");
+    res.end(PAGE);
+  });
+  await new Promise<void>((done) => host.listen(0, "127.0.0.1", done));
+  const hostUrl = `http://127.0.0.1:${(host.address() as AddressInfo).port}`;
+  try {
+    const run = await runWalk(s.home, s.shotlist, s.out, hostUrl);
+    assert.equal(run.status, 0, run.output);
+    assert.deepEqual(other.seen, [], "the other origin received a request");
+    const report = JSON.parse(readFileSync(join(s.out, "walk-report.json"), "utf8"));
+    assert.equal(report.shots[0].status, "failed");
+    assert.equal(report.shots[0].error, "route leaves the walk host");
+    assert.equal(report.shots[1].status, "recorded");
+    assert.deepEqual(webms(s.out), ["shot-02.webm"]);
+    assert.equal(run.output.includes(token), false);
+    assert.equal(run.output.includes(other.url), false);
+  } finally {
+    await new Promise((done) => host.close(done));
+    await other.close();
+  }
+});
+
+test("a shot that names a fallback route directly sets usedFallback and reports the path opened", async () => {
+  const token = randomUUID();
+  const s = setup({ accessToken: token, expiresAt: future() }, [shot(1, "/"), shot(2, "/app/office")]);
+  const server = await startServer(s.sessionFile);
+  try {
+    const run = await runWalk(s.home, s.shotlist, s.out, server.url);
+    assert.equal(run.status, 0, run.output);
+    const report = JSON.parse(readFileSync(join(s.out, "walk-report.json"), "utf8"));
+    assert.equal(report.shots[0].route, "/");
+    assert.equal(report.shots[0].usedFallback, true);
+    assert.equal(report.shots[0].status, "recorded");
+    assert.equal(report.shots[1].usedFallback, false);
   } finally {
     await server.close();
   }
