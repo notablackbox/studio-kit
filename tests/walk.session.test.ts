@@ -1,8 +1,8 @@
-import { test } from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -10,6 +10,12 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const kitRoot = fileURLToPath(new URL("..", import.meta.url));
+
+// Every temp folder a test makes is removed once the file's tests are done.
+const temps: string[] = [];
+after(() => {
+  for (const dir of temps) rmSync(dir, { recursive: true, force: true });
+});
 
 // Holds the settle selectors of /app/office and /app/jobs. It has no Home group,
 // so a /app/home shot never settles.
@@ -46,6 +52,7 @@ async function startServer(sessionFile: string, opts: { loginRedirect?: boolean 
 
 function setup(session: unknown, shots: unknown[]) {
   const home = mkdtempSync(join(tmpdir(), "studio-kit-session-"));
+  temps.push(home);
   const sessionFile = join(home, ".studio", "walk-session");
   if (session !== undefined) {
     mkdirSync(join(home, ".studio"));
@@ -172,13 +179,15 @@ test("a live session: both cookies reach the server, the file is gone first, the
     assert.equal(report.synthetic, false);
     assert.equal(report.recorded, 2);
     assert.equal(report.failed, 0);
+    // seconds is the trimmed clip's measured length, to one decimal: the dwell, give or take.
+    assert.ok(Math.abs(report.shots[0].seconds - 3) <= 0.2, `seconds ${report.shots[0].seconds}`);
     assert.deepEqual(report.shots[0], {
       n: 1,
       surface: "Office",
       route: "/app/office",
       ok: true,
       file: "shot-01.webm",
-      seconds: 3,
+      seconds: report.shots[0].seconds,
       status: "recorded",
       error: "",
       usedFallback: false,
@@ -396,6 +405,82 @@ test("a page that answers 404 fails the shot with page answered 404, its clip re
     assert.equal(report.shots[0].file, "");
     assert.equal(report.shots[1].status, "recorded");
     assert.deepEqual(readdirSync(s.out).sort(), ["shot-02.webm", "walk-report.json"]);
+  } finally {
+    await host.close();
+  }
+});
+
+function ffprobe(file: string) {
+  const out = spawnSync(
+    "ffprobe",
+    [
+      "-v", "error",
+      "-select_streams", "v:0",
+      "-show_entries", "stream=codec_name,width,height,r_frame_rate:format=duration",
+      "-of", "json",
+      file,
+    ],
+    { encoding: "utf8" },
+  );
+  assert.equal(out.status, 0, out.stderr);
+  const parsed = JSON.parse(out.stdout);
+  const stream = parsed.streams[0];
+  return {
+    codec: stream.codec_name as string,
+    width: stream.width as number,
+    height: stream.height as number,
+    rate: stream.r_frame_rate as string,
+    duration: Number(parsed.format.duration),
+  };
+}
+
+// The centre pixel of a clip's first frame, as [r, g, b].
+function firstFrameCentre(file: string): number[] {
+  const out = spawnSync(
+    "ffmpeg",
+    ["-v", "error", "-i", file, "-frames:v", "1", "-vf", "crop=2:2:959:539", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+    { maxBuffer: 1024 * 1024 },
+  );
+  assert.equal(out.status, 0, String(out.stderr));
+  return [...out.stdout.subarray(0, 3)];
+}
+
+test("a real clip starts on the settled page and runs the dwell; seconds is the clip's measured length", async (t) => {
+  const token = randomUUID();
+  const dwell = 3;
+  const s = setup({ accessToken: token, expiresAt: future() }, [{ ...shot(1, "/app/office"), dwell }]);
+  // A blank white page for about 2 s, then a solid green page holding the settle element.
+  const slow =
+    '<!doctype html><title>t</title><body style="margin:0;background:#ffffff"></body><script>' +
+    "setTimeout(() => { document.body.style.background = '#00c000';" +
+    " const m = document.createElement('main'); m.style.height = '100vh'; document.body.append(m); }, 2000);" +
+    "</script>";
+  const host = await startHost((path, res) => {
+    if (path !== "/app/office") return false;
+    res.setHeader("content-type", "text/html");
+    res.end(slow);
+    return true;
+  });
+  try {
+    const run = await runWalk(s.home, s.shotlist, s.out, host.url);
+    assert.equal(run.status, 0, run.output);
+    const report = JSON.parse(readFileSync(join(s.out, "walk-report.json"), "utf8"));
+    assert.equal(report.shots[0].status, "recorded", JSON.stringify(report.shots[0]));
+    const clip = join(s.out, "shot-01.webm");
+    const p = ffprobe(clip);
+    assert.match(p.codec, /^vp[89]$/);
+    assert.equal(p.width, 1920);
+    assert.equal(p.height, 1080);
+    assert.equal(p.rate, "30/1");
+    // No clicks on this route: the clip is the dwell.
+    assert.ok(Math.abs(p.duration - dwell) <= 0.4, `clip runs ${p.duration} s, dwell ${dwell} s`);
+    assert.ok(Math.abs(report.shots[0].seconds - p.duration) <= 0.1, `seconds ${report.shots[0].seconds}, file ${p.duration}`);
+    assert.equal(report.shots[0].seconds, Math.round(report.shots[0].seconds * 10) / 10, "one decimal");
+    const [r, g, b] = firstFrameCentre(clip);
+    t.diagnostic(`clip ${p.duration} s, seconds ${report.shots[0].seconds}, first frame centre rgb(${r}, ${g}, ${b})`);
+    assert.ok(g > 120 && r < 100 && b < 100, `first frame centre is rgb(${r}, ${g}, ${b}), not the settled green`);
+    assert.deepEqual(readdirSync(s.out).sort(), ["shot-01.webm", "walk-report.json"], "no raw or part-trimmed video left");
+    assert.equal(run.output.includes(token), false);
   } finally {
     await host.close();
   }

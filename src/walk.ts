@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -60,11 +60,19 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// A real calendar date written YYYY-MM-DD, the same check render makes.
+export function isIsoDate(value: unknown): value is string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [y, m, d] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d));
+  return date.getUTCFullYear() === y && date.getUTCMonth() === m - 1 && date.getUTCDate() === d;
+}
+
 // Returns the shot list when it is valid, else one problem per entry.
 export function validateShotList(raw: unknown, routes: Route[]): { list?: ShotList; problems: string[] } {
   const problems: string[] = [];
   if (!isObject(raw)) return { problems: ["shot list is not a JSON object"] };
-  if (typeof raw.date !== "string" || raw.date === "") problems.push("date is missing");
+  if (!isIsoDate(raw.date)) problems.push("date must be a real date written YYYY-MM-DD");
   if (!Array.isArray(raw.shots)) return { problems: [...problems, "shots is not a list"] };
   if (raw.shots.length === 0) problems.push("shot list has no shots");
   if (raw.shots.length > 12) problems.push(`shot list has ${raw.shots.length} shots, at most 12`);
@@ -162,7 +170,7 @@ function writeReport(out: string, date: string, synthetic: boolean, results: Sho
   writeFileSync(reportPath, JSON.stringify(report, null, 2) + "\n");
 }
 
-function result(shot: Shot, route: string, usedFallback: boolean, error: string): ShotResult {
+function result(shot: Shot, route: string, usedFallback: boolean, error: string, seconds = shot.dwell): ShotResult {
   const ok = error === "";
   return {
     n: shot.n,
@@ -170,7 +178,7 @@ function result(shot: Shot, route: string, usedFallback: boolean, error: string)
     route,
     ok,
     file: ok ? clipName(shot.n) : "",
-    seconds: ok ? shot.dwell : 0,
+    seconds: ok ? seconds : 0,
     status: ok ? "recorded" : "failed",
     error,
     usedFallback,
@@ -203,6 +211,59 @@ function synthetic(shots: Shot[], routes: Route[], out: string, only: boolean): 
     }
   }
   return results;
+}
+
+// A real clip is cut to the shot: from the moment the settle selector resolved to the end of
+// the dwell. Playwright's video starts with the page, and its first frame comes a little after
+// newPage() resolves, so an offset measured from there lands slightly late in the video, never
+// early. SETTLE_MARGIN_MS adds a little more, for the paint that follows the selector.
+const SETTLE_MARGIN_MS = 100;
+// The page is held this long after the dwell, so the video runs past the cut's end.
+const TAIL_MS = 800;
+const TRIM_TIMEOUT_MS = 5 * 60 * 1000;
+
+function runTool(command: string, args: string[]): Promise<{ status: number | null; stdout: string }> {
+  return new Promise((done) => {
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(command, args, { stdio: ["ignore", "pipe", "ignore"] });
+    } catch {
+      done({ status: null, stdout: "" });
+      return;
+    }
+    let stdout = "";
+    const timer = setTimeout(() => child.kill("SIGKILL"), TRIM_TIMEOUT_MS);
+    child.stdout?.on("data", (chunk) => (stdout += chunk));
+    child.on("error", () => {
+      clearTimeout(timer);
+      done({ status: null, stdout: "" });
+    });
+    child.on("close", (status) => {
+      clearTimeout(timer);
+      done({ status, stdout });
+    });
+  });
+}
+
+// Re-encodes `raw` from `start` for `length` seconds into `target` (VP8, 1920x1080, 30 fps, as
+// the synthetic clips), and returns the written clip's measured length in seconds, or null.
+async function trimClip(raw: string, target: string, start: number, length: number): Promise<number | null> {
+  const encode = await runTool("ffmpeg", [
+    "-y", "-loglevel", "error",
+    "-ss", start.toFixed(3), "-i", raw,
+    "-t", length.toFixed(3),
+    "-an",
+    "-vf", `fps=30,scale=${WIDTH}:${HEIGHT}`,
+    "-c:v", "libvpx", "-b:v", "4M", "-crf", "8", "-deadline", "realtime", "-cpu-used", "8", "-threads", "4",
+    "-pix_fmt", "yuv420p",
+    "-f", "webm",
+    target,
+  ]);
+  if (encode.status !== 0) return null;
+  const probe = await runTool("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", target]);
+  const seconds = Number(probe.stdout.trim());
+  if (probe.status !== 0 || !Number.isFinite(seconds) || seconds <= 0) return null;
+  return seconds;
 }
 
 type Session = { accessToken: string; expiresAt: number };
@@ -283,6 +344,11 @@ async function realWalk(
       let dead = false;
       let leftHost = false;
       let page: Page | undefined;
+      // Wall-clock marks for the cut: the page made (the video starts with it), the settle
+      // selector resolved, the dwell over.
+      let pageAt = 0;
+      let settledAt = 0;
+      let endAt = 0;
       // Every page's video, popups included; all but the shot's own are removed after close.
       const videos: Promise<string>[] = [];
       context.on("page", (p) => {
@@ -330,6 +396,7 @@ async function realWalk(
         });
         await context.addCookies([cookie("access_token"), cookie("refresh_token")]);
         page = await context.newPage();
+        pageAt = Date.now();
         // The shot's own page: every top-level document request, redirect hops included.
         await holdToHost(context, page, walkUrl.origin, () => {
           leftHost = true;
@@ -358,6 +425,7 @@ async function realWalk(
         if (error === "" && !dead) {
           try {
             await page.waitForSelector(settle, { timeout: SETTLE_TIMEOUT_MS });
+            settledAt = Date.now();
           } catch {
             error = "settle selector not found";
           }
@@ -372,7 +440,11 @@ async function realWalk(
             }
           }
         }
-        if (error === "" && !dead) await page.waitForTimeout(shot.dwell * 1000);
+        if (error === "" && !dead) {
+          await page.waitForTimeout(shot.dwell * 1000);
+          endAt = Date.now();
+          await page.waitForTimeout(TAIL_MS);
+        }
         if (leftHost && !dead) error = "route leaves the walk host";
       } catch {
         if (error === "") error = "shot failed";
@@ -388,21 +460,34 @@ async function realWalk(
         for (const file of written) rmSync(file, { force: true });
         return { results, dead: true };
       }
+      let seconds = 0;
+      const trimmed = join(out, `.${clipName(shot.n)}.trim`);
       if (error === "" && videoPath) {
-        try {
-          renameSync(videoPath, join(out, clipName(shot.n)));
-          written[written.indexOf(videoPath)] = join(out, clipName(shot.n));
-        } catch {
-          error = "clip not written";
+        // Cut to the settled page and the dwell, then put the cut in place under the clip's name.
+        const start = (settledAt - pageAt + SETTLE_MARGIN_MS) / 1000;
+        const length = (endAt - settledAt) / 1000;
+        written.push(trimmed);
+        const measured = await trimClip(videoPath, trimmed, Math.max(0, start), length);
+        if (measured === null) error = "clip could not be trimmed";
+        else {
+          try {
+            renameSync(trimmed, join(out, clipName(shot.n)));
+            written[written.indexOf(trimmed)] = join(out, clipName(shot.n));
+            rmSync(videoPath, { force: true });
+            seconds = Math.round(measured * 10) / 10;
+          } catch {
+            error = "clip not written";
+          }
         }
       } else if (error === "") {
         error = "clip not written";
       }
       if (error !== "") {
         if (videoPath) rmSync(videoPath, { force: true });
+        rmSync(trimmed, { force: true });
         rmSync(join(out, clipName(shot.n)), { force: true });
       }
-      results.push(result(shot, route, usedFallback, error));
+      results.push(result(shot, route, usedFallback, error, seconds));
     }
   } finally {
     await browser.close().catch(() => {});
@@ -424,22 +509,22 @@ async function main(): Promise<number> {
     }).values;
   } catch (error) {
     // The message can quote an argument: keep it on one line.
-    console.error(`walk: ${shown((error as Error).message).slice(1, -1)}`);
+    console.log(`walk: ${shown((error as Error).message).slice(1, -1)}`);
     return 2;
   }
   if (!values.shotlist) {
-    console.error("walk: --shotlist <path> is required");
+    console.log("walk: --shotlist <path> is required");
     return 2;
   }
   const dryRun = values["dry-run"] === true;
   if (!dryRun && !values.out) {
-    console.error("walk: --out <dir> is required unless --dry-run");
+    console.log("walk: --out <dir> is required unless --dry-run");
     return 2;
   }
   let onlyN: number | undefined;
   if (values.only !== undefined) {
     if (!/^[0-9]+$/.test(values.only)) {
-      console.error("walk: --only wants a shot number");
+      console.log("walk: --only wants a shot number");
       return 2;
     }
     onlyN = Number(values.only);

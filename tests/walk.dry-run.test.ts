@@ -1,12 +1,18 @@
-import { test } from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const kitRoot = fileURLToPath(new URL("..", import.meta.url));
+
+// Every temp folder a test makes is removed once the file's tests are done.
+const temps: string[] = [];
+after(() => {
+  for (const dir of temps) rmSync(dir, { recursive: true, force: true });
+});
 
 type Shot = Record<string, unknown>;
 
@@ -34,6 +40,7 @@ function shot(n: number, overrides: Shot = {}): Shot {
 
 function setup(shotlist: unknown) {
   const dir = mkdtempSync(join(tmpdir(), "studio-kit-walk-"));
+  temps.push(dir);
   const file = join(dir, "shotlist.json");
   writeFileSync(file, typeof shotlist === "string" ? shotlist : JSON.stringify(shotlist));
   return { dir, file };
@@ -113,6 +120,18 @@ test("thirteen shots are refused, twelve are accepted", () => {
   assert.equal(twelve.result.status, 0, twelve.result.stderr);
 });
 
+test("a date that is not a real YYYY-MM-DD is refused with one line, a real one is accepted", () => {
+  for (const date of ["", "13 October 2026", "2026-13-01", "2026-02-30", "2026-10-13T00:00", 20261013]) {
+    const { result } = dryRun({ date, shots: [shot(1)] });
+    assert.equal(result.status, 2, `date ${JSON.stringify(date)}`);
+    assert.deepEqual(lines(result.stdout), ["date must be a real date written YYYY-MM-DD"]);
+  }
+  const missing = dryRun({ shots: [shot(1)] });
+  assert.equal(missing.result.status, 2);
+  const leap = dryRun({ date: "2028-02-29", shots: [shot(1)] });
+  assert.equal(leap.result.status, 0, leap.output);
+});
+
 test("no shots is refused", () => {
   const { result } = dryRun({ date: "2026-10-13", shots: [] });
   assert.equal(result.status, 2);
@@ -164,8 +183,20 @@ test("an unreadable or malformed shot list is refused with exit 2", () => {
 
 test("missing --shotlist, or missing --out outside a dry run, exits 2", () => {
   const { dir, file } = setup({ date: "2026-10-13", shots: [shot(1)] });
-  assert.equal(walk([], dir).result.status, 2);
-  assert.equal(walk(["--shotlist", file], dir).result.status, 2);
+  const cases: [string[], string][] = [
+    [[], "walk: --shotlist <path> is required"],
+    [["--shotlist", file], "walk: --out <dir> is required unless --dry-run"],
+    [["--shotlist", file, "--out", "out", "--only", "two"], "walk: --only wants a shot number"],
+  ];
+  for (const [args, line] of cases) {
+    const { result } = walk(args, dir);
+    assert.equal(result.status, 2, JSON.stringify(args));
+    // Every refusal line is on stdout, in all three scripts.
+    assert.deepEqual(lines(result.stdout), [line]);
+  }
+  const unknown = walk(["--nope"], dir);
+  assert.equal(unknown.result.status, 2);
+  assert.equal(lines(unknown.result.stdout).length, 1);
 });
 
 test("validation runs before any mode: a bad list with --synthetic writes nothing", () => {
