@@ -175,6 +175,20 @@ test("walk-report.json at a symlink is replaced, never written through, and neve
   assert.deepEqual(readdirSync(out).filter((n) => n.endsWith(".tmp")), []);
 });
 
+test("--synthetic never writes a clip through a symlink at its name", () => {
+  const { dir, file } = setup({ date: "2026-10-13", shots: [shot(1)] });
+  const out = join(dir, "out");
+  mkdirSync(out);
+  const outside = join(dir, "outside");
+  writeFileSync(outside, "keep me");
+  symlinkSync(outside, join(out, "shot-01.webm"));
+  const run = walk(["--shotlist", file, "--out", out, "--synthetic"], dir);
+  assert.equal(run.result.status, 0, run.output);
+  assert.equal(readFileSync(outside, "utf8"), "keep me", "the link's target was written through");
+  assert.equal(lstatSync(join(out, "shot-01.webm")).isFile(), true);
+  assert.deepEqual(readdirSync(out).sort(), ["shot-01.webm", "walk-report.json"]);
+});
+
 test("no shots is refused", () => {
   const { result } = dryRun({ date: "2026-10-13", shots: [] });
   assert.equal(result.status, 2);

@@ -5,7 +5,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CLOSING_FRAMES, CROSSFADE_FRAMES, FPS, OPENING_FRAMES, PROOF_FRAMES } from "../src/remotion/Teaser.tsx";
+import { CLOSING_FRAMES, CROSSFADE_FRAMES, FPS, OPENING_FRAMES, PROOF_FRAMES, fitText, type Look } from "../src/remotion/Teaser.tsx";
+import { captionBelowHeight } from "../src/remotion/cards/LowerThird.tsx";
 
 const kitRoot = fileURLToPath(new URL("..", import.meta.url));
 const CLIP_SECONDS = 3;
@@ -72,6 +73,34 @@ before(() => {
 // The stills and the clips are removed once the file's tests are done.
 after(() => {
   if (dir) rmSync(dir, { recursive: true, force: true });
+});
+
+// The caption fit, without a render: the 4:5 frame's look, as Teaser builds it.
+const social = { width: 1080, height: 1350, t: 1, margin: 90, fitText } as unknown as Look;
+const master = { width: 1920, height: 1080, t: 1, margin: 160, fitText } as unknown as Look;
+
+test("a caption steps down from 48 px to fit two lines, never below 32 px", () => {
+  const words = "Every step of the run, as it ran, with the receipt beside it";
+  assert.deepEqual(fitText(words, 48, 32, 900, 2), { size: 48, lines: 2 });
+  const wide = fitText("W".repeat(45), 48, 32, 900, 2);
+  assert.ok(wide.size < 48 && wide.size >= 32 && wide.lines <= 2, JSON.stringify(wide));
+  for (const caption of ["W".repeat(60), "漢".repeat(60)]) {
+    const fit = fitText(caption, 48, 32, 900, 2);
+    assert.equal(fit.size, 32, caption.slice(0, 3));
+    assert.ok(fit.lines >= 2);
+    assert.deepEqual(fitText(caption, 48, 32, 1600, 2), { size: 48, lines: 2 }, "16:9 fits two lines at 48 px");
+  }
+});
+
+test("the 4:5 caption room is two 48 px lines for every caption that fits them, and the real height beyond", () => {
+  const two = (48 + 2 * 48 * 1.2);
+  for (const caption of ["A caption", "Every step of the run, as it ran, with the receipt beside it", "W".repeat(45)]) {
+    assert.equal(captionBelowHeight(caption, social), two, caption);
+  }
+  const cjk = "漢".repeat(60);
+  const fit = fitText(cjk, 48, 32, 900, 2);
+  assert.equal(captionBelowHeight(cjk, social), Math.max(two, 48 + fit.lines * fit.size * 1.2));
+  assert.equal(captionBelowHeight(cjk, master), two);
 });
 
 for (const [card, frame] of Object.entries(frames)) {

@@ -132,7 +132,10 @@ opened. `usedFallback` is true when that path is a fallback: under `--only`, or
 when the shot names a path that is some entry's `fallback` and no entry's `route`.
 The report is written to a fresh name in `--out` and renamed into place, so a
 symlink at `walk-report.json` is replaced, never written through; `--only`
-merges only a report that is a plain file.
+merges only a report that is a plain file. Clips are written the same way: each
+is encoded under a fresh random name in `--out`, then whatever sits at
+`shot-NN.webm` is removed (a link, never its target) and the clip renamed into
+place.
 
 ## `render`
 
@@ -158,7 +161,9 @@ line naming the field (`opening.headline runs 61 characters, want at most 60`);
 each clip at least one second; `posterFrame` a whole frame inside the master; no
 clip named like one of render's own outputs (`teaser.mp4`, `teaser-4x5.mp4`,
 `poster.png`, `render-report.json`); and `--out` a folder (or not there yet)
-that is neither `--clips` nor inside it. A `--clips` folder below `--out` is
+that is neither `--clips` nor inside it, and whose nearest existing ancestor is
+a folder (a path under a file, or a dangling symlink, is refused with `--out is
+not a folder`; a `--clips` like that is `--clips is not a folder`). A `--clips` folder below `--out` is
 fine (`--clips /work/raw/<date> --out /work`): render writes only its own fixed
 names at the top of `--out`. Captions and card text are counted as Unicode characters (code points),
 not UTF-16 units, so an emoji counts as one. Values from the script are printed
@@ -238,7 +243,10 @@ a lower third (one line, or two balanced lines when the caption is long; never
 cut short), a proof card (line and source), and a closing card with
 the stacked mark and wordmark, the closing line and the date (`13 October
 2026`). One 12 frame cross-fade between each. In the 4:5 reframe the type keeps
-the master's pixel sizes (headlines 72 to 112 px, the caption 48 px), and each
+the master's pixel sizes (headlines 72 to 112 px, the caption 48 px). A caption
+of wide glyphs (W, CJK) steps down until it fits two lines, never below 32 px;
+60 such characters still take three lines at 32 px in 4:5, and the space kept
+beneath the clip grows to hold them, so the block stays centred. Each
 clip and its caption (room for two lines) are centred together as one block.
 A long opening headline or proof line takes up to three balanced lines, the
 type stepping down to fit them but never below 72 px; text that still needs

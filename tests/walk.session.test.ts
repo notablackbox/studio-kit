@@ -2,7 +2,7 @@ import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -485,6 +485,32 @@ test("a real clip starts on the settled page and runs the dwell; seconds is the 
     assert.equal(run.output.includes(token), false);
   } finally {
     await host.close();
+  }
+});
+
+test("symlinks in --out at the clip's name or a trim name are never written through", async () => {
+  const token = randomUUID();
+  const s = setup({ accessToken: token, expiresAt: future() }, [shot(1, "/app/office")]);
+  mkdirSync(s.out);
+  const targets: string[] = [];
+  // The old predictable trim name, and the clip's own name, each a link to a file outside --out.
+  for (const name of [".shot-01.webm.trim", "shot-01.webm"]) {
+    const target = join(s.home, `outside-${targets.length}`);
+    writeFileSync(target, "keep me");
+    symlinkSync(target, join(s.out, name));
+    targets.push(target);
+  }
+  const server = await startServer(s.sessionFile);
+  try {
+    const run = await runWalk(s.home, s.shotlist, s.out, server.url);
+    assert.equal(run.status, 0, run.output);
+    for (const target of targets) assert.equal(readFileSync(target, "utf8"), "keep me", `${target} was written through`);
+    assert.equal(lstatSync(join(s.out, "shot-01.webm")).isFile(), true);
+    const report = JSON.parse(readFileSync(join(s.out, "walk-report.json"), "utf8"));
+    assert.equal(report.shots[0].status, "recorded", JSON.stringify(report.shots[0]));
+    assert.deepEqual(readdirSync(s.out).filter((n) => n.endsWith(".trim.webm")), [], "no trim file left");
+  } finally {
+    await server.close();
   }
 });
 

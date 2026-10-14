@@ -201,6 +201,9 @@ function synthetic(shots: Shot[], routes: Route[], out: string, only: boolean): 
   for (const shot of shots) {
     const { route, usedFallback } = pageFor(routes, shot, only);
     const file = join(out, clipName(shot.n));
+    // Written to a fresh name, then renamed over the clip's name (whatever sat there removed
+    // first), so a symlink in --out is never written through.
+    const temp = join(out, `.shot-${String(shot.n).padStart(2, "0")}.${randomUUID()}.synthetic.webm`);
     const ffmpeg = spawnSync(
       "ffmpeg",
       [
@@ -209,17 +212,29 @@ function synthetic(shots: Shot[], routes: Route[], out: string, only: boolean): 
         "-t", String(shot.dwell),
         "-c:v", "libvpx", "-b:v", "2M", "-deadline", "realtime", "-cpu-used", "8", "-threads", "4",
         "-pix_fmt", "yuv420p",
-        file,
+        "-f", "webm",
+        temp,
       ],
       { encoding: "utf8" },
     );
-    if (ffmpeg.error) throw new Error("ffmpeg could not be started");
-    if (ffmpeg.status !== 0) {
-      rmSync(file, { force: true });
-      results.push(result(shot, route, usedFallback, "clip not written"));
-    } else {
-      results.push(result(shot, route, usedFallback, ""));
+    if (ffmpeg.error) {
+      rmSync(temp, { force: true });
+      throw new Error("ffmpeg could not be started");
     }
+    let error = ffmpeg.status === 0 ? "" : "clip not written";
+    if (error === "") {
+      try {
+        rmSync(file, { force: true });
+        renameSync(temp, file);
+      } catch {
+        error = "clip not written";
+      }
+    }
+    if (error !== "") {
+      rmSync(temp, { force: true });
+      rmSync(file, { force: true });
+    }
+    results.push(result(shot, route, usedFallback, error));
   }
   return results;
 }
@@ -476,7 +491,8 @@ async function realWalk(
         return { results, dead: true };
       }
       let seconds = 0;
-      const trimmed = join(out, `.${clipName(shot.n)}.trim`);
+      // A fresh name per cut, so ffmpeg never opens a name that could already be a link.
+      const trimmed = join(out, `.shot-${String(shot.n).padStart(2, "0")}.${randomUUID()}.trim.webm`);
       if (error === "" && videoPath) {
         // Cut to the settled page and the dwell, then put the cut in place under the clip's name.
         const start = (settledAt - pageAt + SETTLE_MARGIN_MS) / 1000;
@@ -486,6 +502,8 @@ async function realWalk(
         if (measured === null) error = "clip could not be trimmed";
         else {
           try {
+            // Whatever sits at the clip's name goes first: rm removes a link, never its target.
+            rmSync(join(out, clipName(shot.n)), { force: true });
             renameSync(trimmed, join(out, clipName(shot.n)));
             written[written.indexOf(trimmed)] = join(out, clipName(shot.n));
             rmSync(videoPath, { force: true });

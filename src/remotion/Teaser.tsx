@@ -81,6 +81,7 @@ export type Look = {
   color: { black: string; warmWhite: string; graphite: string; silver: string; productGreen: string };
   settle: (frame: number) => CSSProperties;
   fit: typeof fitFontSize;
+  fitText: typeof fitText;
   wrap: CSSProperties;
 };
 
@@ -105,11 +106,23 @@ function advanceEm(char: string): number {
 }
 
 export function fitFontSize(text: string, max: number, min: number, width: number, lines: number): number {
+  return fitText(text, max, min, width, lines).size;
+}
+
+// The same fit, with the number of lines the text is estimated to take at that size.
+export function fitText(
+  text: string,
+  max: number,
+  min: number,
+  width: number,
+  lines: number,
+): { size: number; lines: number } {
   const words = text.trim().split(/\s+/).map((word) => [...word].map(advanceEm));
   for (let size = max; size > min; size -= 4) {
-    if (linesAt(words, width / size) <= lines) return size;
+    const taken = linesAt(words, width / size);
+    if (taken <= lines) return { size, lines: taken };
   }
-  return min;
+  return { size: min, lines: linesAt(words, width / min) };
 }
 
 // Lines a run of words takes on a line `room` em wide; a word wider than the line breaks anywhere.
@@ -173,6 +186,7 @@ function useLook(): Look {
     },
     settle,
     fit: fitFontSize,
+    fitText,
     wrap: WRAP,
   };
 }
@@ -216,7 +230,7 @@ function ClipScene({ clip, look }: { clip: CutClip; look: Look }) {
   // 4:5: the clip at full frame width on black, nothing cropped, the caption beneath it on
   // the grid; the clip and its caption are centred together as one block.
   const clipHeight = (look.width * 9) / 16;
-  const top = Math.round((look.height - clipHeight - captionBelowHeight(look.t)) / 2);
+  const top = Math.round((look.height - clipHeight - captionBelowHeight(clip.caption, look)) / 2);
   return (
     <AbsoluteFill style={{ backgroundColor: look.color.black }}>
       <div style={{ position: "absolute", left: 0, top, width: look.width, height: clipHeight }}>{video}</div>

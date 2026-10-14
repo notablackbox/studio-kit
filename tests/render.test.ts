@@ -347,6 +347,25 @@ test("--out that is --clips, or inside it, is refused before any work", () => {
   }
 });
 
+test("--out or --clips under a file, or a dangling symlink, is refused as not a folder before any work", () => {
+  const ws = workspace(["shot-01.webm", "shot-02.webm", "shot-03.webm"]);
+  writeFileSync(join(ws.dir, "afile"), "a file, not a folder");
+  symlinkSync(join(ws.dir, "nowhere"), join(ws.dir, "dangling"));
+  for (const out of ["afile/sub", "afile/sub/deeper", "dangling", "dangling/sub"]) {
+    const run = render(ws, cutScript(clipsCut(15)), { out });
+    assert.equal(run.result.status, 2, `${out}: ${run.output}`);
+    assert.deepEqual(lines(run.result.stdout), ["--out is not a folder"], out);
+    assert.equal(existsSync(join(ws.dir, "nowhere")), false, "nothing made through the link");
+    assert.deepEqual(kitTemp(ws), []);
+  }
+  for (const clips of ["afile/sub", "dangling"]) {
+    const run = render(ws, cutScript(clipsCut(15)), { clips });
+    assert.equal(run.result.status, 2, `${clips}: ${run.output}`);
+    assert.match(run.result.stdout, /^--clips is not a folder$/m, clips);
+    assert.equal(existsSync(ws.out), false);
+  }
+});
+
 test("a --clips folder below --out passes the gate: the skill's /work and /work/raw/<date> shape", () => {
   const work = tempDir("studio-kit-work-");
   const clips = join(work, "raw", "2026-10-13");

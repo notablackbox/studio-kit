@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
-  existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -598,16 +598,36 @@ const within = (inner: string, outer: string): boolean => {
   return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 };
 
+// True when `path` is a folder, or can be made as one: its nearest existing ancestor (a symlink
+// followed) is a folder. A file on the way, or a dangling symlink, is not.
+function folderOrMakeable(path: string): boolean {
+  let at = resolve(path);
+  for (;;) {
+    let present = true;
+    try {
+      lstatSync(at);
+    } catch {
+      present = false;
+    }
+    if (present) {
+      try {
+        return statSync(at).isDirectory();
+      } catch {
+        return false;
+      }
+    }
+    const parent = dirname(at);
+    if (parent === at) return false;
+    at = parent;
+  }
+}
+
 // --out must be a folder (or not exist yet), and neither --clips nor inside it: render writes
 // into --out, and must never write among the clips. A --clips folder below --out is fine
 // (`--clips /work/raw/<date> --out /work`): render writes only its fixed names at the top of
 // --out, and no clip may carry one of those names.
 export function checkOut(out: string, clipsDir: string): string[] {
-  try {
-    if (existsSync(out) && !statSync(out).isDirectory()) return ["--out is not a folder"];
-  } catch {
-    return ["--out is not a folder"];
-  }
+  if (!folderOrMakeable(out)) return ["--out is not a folder"];
   if (within(realFolder(out), realFolder(clipsDir))) return ["--out must not be the --clips folder or inside it"];
   return [];
 }
