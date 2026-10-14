@@ -1,15 +1,27 @@
-import { test } from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const kitRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 
-function run(entry: string) {
+// Every temp folder a test makes is removed once the file's tests are done.
+const temps: string[] = [];
+after(() => {
+  for (const dir of temps) rmSync(dir, { recursive: true, force: true });
+});
+
+function tempDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "studio-kit-changelog-"));
+  temps.push(dir);
+  return dir;
+}
+
+function run(entry: string) {
+  const dir = tempDir();
   const input = join(dir, "entry.md");
   const output = join(dir, "card.html");
   writeFileSync(input, entry);
@@ -85,10 +97,51 @@ test("a first line with no date exits 2 and writes no file", () => {
   assert.equal(result.status, 2);
   assert.equal(html, null);
   assert.equal(existsSync(output), false);
+  // Refusal lines go to stdout, as walk and render print theirs.
+  assert.deepEqual(result.stdout.split("\n").filter(Boolean), ["changelog: the first line holds no date"]);
+  assert.equal(result.stderr, "");
+});
+
+test("every refusal is one line on stdout", () => {
+  const dir = tempDir();
+  const env = { ...process.env, INIT_CWD: dir };
+  const cases: [string[], string][] = [
+    [[], "changelog: --in <file.md> and --out <file.html> are both required"],
+    [["--in", "entry.md"], "changelog: --in <file.md> and --out <file.html> are both required"],
+    [["--in", "missing.md", "--out", "card.html"], "changelog: cannot read the --in file"],
+  ];
+  for (const [args, line] of cases) {
+    const result = spawnSync(process.execPath, ["--import", "tsx", "src/changelog.ts", ...args], {
+      cwd: kitRoot,
+      encoding: "utf8",
+      env,
+    });
+    assert.equal(result.status, 2, JSON.stringify(args));
+    assert.deepEqual(result.stdout.split("\n").filter(Boolean), [line]);
+    assert.equal(result.stderr, "");
+  }
+  const unknown = spawnSync(process.execPath, ["--import", "tsx", "src/changelog.ts", "--nope\nforged"], {
+    cwd: kitRoot,
+    encoding: "utf8",
+    env,
+  });
+  assert.equal(unknown.status, 2);
+  assert.equal(unknown.stdout.split("\n").filter(Boolean).length, 1, JSON.stringify(unknown.stdout));
+});
+
+test("importing changelog.ts runs nothing: no output, no exit code", () => {
+  const result = spawnSync(
+    process.execPath,
+    ["--import", "tsx", "--input-type=module", "-e", 'const m = await import("./src/changelog.ts"); if (typeof m.parseEntry !== "function") process.exit(9);'],
+    { cwd: kitRoot, encoding: "utf8" },
+  );
+  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
 });
 
 test("missing flags exit 2 and write nothing", () => {
-  const dir = mkdtempSync(join(tmpdir(), "studio-kit-changelog-"));
+  const dir = tempDir();
   const input = join(dir, "entry.md");
   writeFileSync(input, "## 2026-10-13\n- One change\nClosing line.\n");
   const bare = spawnSync(process.execPath, ["--import", "tsx", "src/changelog.ts"], {

@@ -1,13 +1,19 @@
-import { test } from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright";
 import { newRecordingContext } from "../src/walk.ts";
+
+// Every temp folder a test makes is removed once the file's tests are done.
+const temps: string[] = [];
+after(() => {
+  for (const dir of temps) rmSync(dir, { recursive: true, force: true });
+});
 
 const PAGE = "<!doctype html><title>t</title><main><h1>synthetic</h1></main>";
 
@@ -19,6 +25,7 @@ test("the recording context leaves exactly one webm that ffprobe reads as 1920x1
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
   const { port } = server.address() as AddressInfo;
   const dir = mkdtempSync(join(tmpdir(), "studio-kit-context-"));
+  temps.push(dir);
   const browser = await chromium.launch();
   try {
     const context = await newRecordingContext(browser, dir);

@@ -1,12 +1,29 @@
-import { test } from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { reportSeconds } from "../src/walk.ts";
 
 const kitRoot = fileURLToPath(new URL("..", import.meta.url));
+
+// Every temp folder a test makes is removed once the file's tests are done.
+const temps: string[] = [];
+after(() => {
+  for (const dir of temps) rmSync(dir, { recursive: true, force: true });
+});
 
 type Shot = Record<string, unknown>;
 
@@ -34,6 +51,7 @@ function shot(n: number, overrides: Shot = {}): Shot {
 
 function setup(shotlist: unknown) {
   const dir = mkdtempSync(join(tmpdir(), "studio-kit-walk-"));
+  temps.push(dir);
   const file = join(dir, "shotlist.json");
   writeFileSync(file, typeof shotlist === "string" ? shotlist : JSON.stringify(shotlist));
   return { dir, file };
@@ -113,6 +131,64 @@ test("thirteen shots are refused, twelve are accepted", () => {
   assert.equal(twelve.result.status, 0, twelve.result.stderr);
 });
 
+test("a date that is not a real YYYY-MM-DD is refused with one line, a real one is accepted", () => {
+  for (const date of ["", "13 October 2026", "2026-13-01", "2026-02-30", "2026-10-13T00:00", 20261013]) {
+    const { result } = dryRun({ date, shots: [shot(1)] });
+    assert.equal(result.status, 2, `date ${JSON.stringify(date)}`);
+    assert.deepEqual(lines(result.stdout), ["date must be a real date written YYYY-MM-DD"]);
+  }
+  const missing = dryRun({ shots: [shot(1)] });
+  assert.equal(missing.result.status, 2);
+  const leap = dryRun({ date: "2028-02-29", shots: [shot(1)] });
+  assert.equal(leap.result.status, 0, leap.output);
+});
+
+test("a clip's seconds are rounded down to one decimal, never more than the file holds", () => {
+  assert.equal(reportSeconds(3.033), 3);
+  assert.equal(reportSeconds(3.08), 3);
+  assert.equal(reportSeconds(2.999), 2.9);
+  assert.equal(reportSeconds(8), 8);
+  assert.equal(reportSeconds(8.1), 8.1);
+  assert.equal(reportSeconds(2.3), 2.3);
+  for (const measured of [0.3, 2.95, 3.0999, 14.96, 19.99, 20.04]) {
+    const shown = reportSeconds(measured);
+    assert.ok(shown <= measured && measured - shown < 0.1, `${measured} -> ${shown}`);
+    assert.equal(shown, Number(shown.toFixed(1)));
+  }
+});
+
+test("walk-report.json at a symlink is replaced, never written through, and never merged from", () => {
+  const { dir, file } = setup({ date: "2026-10-13", shots: [shot(1), shot(2, { route: "/app/jobs" })] });
+  const out = join(dir, "out");
+  mkdirSync(out);
+  const outside = join(dir, "outside.json");
+  const kept = JSON.stringify({ date: "2020-01-01", synthetic: true, shots: [{ n: 9 }], recorded: 1, failed: 0 });
+  writeFileSync(outside, kept);
+  symlinkSync(outside, join(out, "walk-report.json"));
+  const run = walk(["--shotlist", file, "--out", out, "--synthetic", "--only", "2"], dir);
+  assert.equal(run.result.status, 0, run.output);
+  assert.equal(readFileSync(outside, "utf8"), kept, "the link's target was written through");
+  assert.equal(lstatSync(join(out, "walk-report.json")).isFile(), true);
+  const report = JSON.parse(readFileSync(join(out, "walk-report.json"), "utf8"));
+  assert.deepEqual(report.shots.map((s: Shot) => s.n), [2], "a linked report is not merged");
+  assert.equal(report.date, "2026-10-13");
+  assert.deepEqual(readdirSync(out).filter((n) => n.endsWith(".tmp")), []);
+});
+
+test("--synthetic never writes a clip through a symlink at its name", () => {
+  const { dir, file } = setup({ date: "2026-10-13", shots: [shot(1)] });
+  const out = join(dir, "out");
+  mkdirSync(out);
+  const outside = join(dir, "outside");
+  writeFileSync(outside, "keep me");
+  symlinkSync(outside, join(out, "shot-01.webm"));
+  const run = walk(["--shotlist", file, "--out", out, "--synthetic"], dir);
+  assert.equal(run.result.status, 0, run.output);
+  assert.equal(readFileSync(outside, "utf8"), "keep me", "the link's target was written through");
+  assert.equal(lstatSync(join(out, "shot-01.webm")).isFile(), true);
+  assert.deepEqual(readdirSync(out).sort(), ["shot-01.webm", "walk-report.json"]);
+});
+
 test("no shots is refused", () => {
   const { result } = dryRun({ date: "2026-10-13", shots: [] });
   assert.equal(result.status, 2);
@@ -164,8 +240,20 @@ test("an unreadable or malformed shot list is refused with exit 2", () => {
 
 test("missing --shotlist, or missing --out outside a dry run, exits 2", () => {
   const { dir, file } = setup({ date: "2026-10-13", shots: [shot(1)] });
-  assert.equal(walk([], dir).result.status, 2);
-  assert.equal(walk(["--shotlist", file], dir).result.status, 2);
+  const cases: [string[], string][] = [
+    [[], "walk: --shotlist <path> is required"],
+    [["--shotlist", file], "walk: --out <dir> is required unless --dry-run"],
+    [["--shotlist", file, "--out", "out", "--only", "two"], "walk: --only wants a shot number"],
+  ];
+  for (const [args, line] of cases) {
+    const { result } = walk(args, dir);
+    assert.equal(result.status, 2, JSON.stringify(args));
+    // Every refusal line is on stdout, in all three scripts.
+    assert.deepEqual(lines(result.stdout), [line]);
+  }
+  const unknown = walk(["--nope"], dir);
+  assert.equal(unknown.result.status, 2);
+  assert.equal(lines(unknown.result.stdout).length, 1);
 });
 
 test("validation runs before any mode: a bad list with --synthetic writes nothing", () => {

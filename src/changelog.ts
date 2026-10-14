@@ -1,8 +1,11 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { fileURLToPath } from "node:url";
+import { shown } from "./walk.ts";
 
 // Exit codes: 0 done, 2 refused before any work, 1 anything unexpected.
+// Refusal lines go to stdout, as in walk and render; stderr carries diagnostics only.
 
 const MONTHS =
   "January|February|March|April|May|June|July|August|September|October|November|December";
@@ -69,11 +72,12 @@ function main(): number {
   try {
     values = parseArgs({ options: { in: { type: "string" }, out: { type: "string" } } }).values;
   } catch (error) {
-    console.error(`changelog: ${(error as Error).message}`);
+    // The message can quote an argument: keep it on one line.
+    console.log(`changelog: ${shown((error as Error).message).slice(1, -1)}`);
     return 2;
   }
   if (!values.in || !values.out) {
-    console.error("changelog: --in <file.md> and --out <file.html> are both required");
+    console.log("changelog: --in <file.md> and --out <file.html> are both required");
     return 2;
   }
   const base = process.env.INIT_CWD || process.cwd();
@@ -83,12 +87,12 @@ function main(): number {
   try {
     markdown = readFileSync(input, "utf8");
   } catch {
-    console.error("changelog: cannot read the --in file");
+    console.log("changelog: cannot read the --in file");
     return 2;
   }
   const card = parseEntry(markdown);
   if (card === null) {
-    console.error("changelog: the first line holds no date");
+    console.log("changelog: the first line holds no date");
     return 2;
   }
   mkdirSync(dirname(output), { recursive: true });
@@ -96,9 +100,20 @@ function main(): number {
   return 0;
 }
 
-try {
-  process.exitCode = main();
-} catch (error) {
-  console.error(`changelog: ${(error as Error).message}`);
-  process.exitCode = 1;
+const isMain = (() => {
+  try {
+    return process.argv[1] !== undefined && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+})();
+
+if (isMain) {
+  try {
+    process.exitCode = main();
+  } catch {
+    // The kit's own words only: a raw error can embed a path.
+    console.error("changelog: unexpected failure");
+    process.exitCode = 1;
+  }
 }
