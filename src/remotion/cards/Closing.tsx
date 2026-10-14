@@ -13,8 +13,8 @@ const LOCKUP = { width: 231.85, markWidth: 156.32, markHeight: 100, wordmarkHeig
 // The closing card: the lockup, the closing line and the date.
 export function Closing({ line, date, look }: { line: string; date: string; look: Look }) {
   const frame = useCurrentFrame();
-  const { u, margin, color } = look;
-  const s = (300 * u) / LOCKUP.width;
+  const { t, margin, color } = look;
+  const s = (300 * t) / LOCKUP.width;
   return (
     <AbsoluteFill
       style={{
@@ -44,9 +44,9 @@ export function Closing({ line, date, look }: { line: string; date: string; look
         <h2
           style={{
             margin: 0,
-            marginTop: 88 * u,
-            maxWidth: 1400 * u,
-            fontSize: 72 * u,
+            marginTop: 88 * t,
+            maxWidth: Math.min(1400 * t, look.width - 2 * margin),
+            fontSize: 72 * t,
             fontWeight: 600,
             lineHeight: 1.08,
             letterSpacing: "-0.02em",
@@ -59,8 +59,8 @@ export function Closing({ line, date, look }: { line: string; date: string; look
         <p
           style={{
             margin: 0,
-            marginTop: 24 * u,
-            fontSize: 36 * u,
+            marginTop: 24 * t,
+            fontSize: 36 * t,
             fontWeight: 400,
             lineHeight: 1.3,
             color: color.silver,

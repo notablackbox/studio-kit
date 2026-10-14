@@ -4,7 +4,7 @@ import type { Look } from "../Teaser.tsx";
 // The opening card: a short green rule, the headline and one supporting line, left on the grid.
 export function Opening({ headline, sub, look }: { headline: string; sub: string; look: Look }) {
   const frame = useCurrentFrame();
-  const { u, margin, color } = look;
+  const { t, margin, color } = look;
   return (
     <AbsoluteFill
       style={{
@@ -15,12 +15,12 @@ export function Opening({ headline, sub, look }: { headline: string; sub: string
       }}
     >
       <div style={look.settle(frame)}>
-        <div style={{ width: 56 * u, height: 4 * u, backgroundColor: color.productGreen, marginBottom: 44 * u }} />
+        <div style={{ width: 56 * t, height: 4 * t, backgroundColor: color.productGreen, marginBottom: 44 * t }} />
         <h1
           style={{
             margin: 0,
-            maxWidth: 1400 * u,
-            fontSize: 112 * u,
+            maxWidth: Math.min(1400 * t, look.width - 2 * margin),
+            fontSize: 112 * t,
             fontWeight: 600,
             lineHeight: 1.04,
             letterSpacing: "-0.025em",
@@ -33,8 +33,8 @@ export function Opening({ headline, sub, look }: { headline: string; sub: string
         <p
           style={{
             margin: 0,
-            marginTop: 36 * u,
-            fontSize: 40 * u,
+            marginTop: 36 * t,
+            fontSize: 40 * t,
             fontWeight: 400,
             lineHeight: 1.3,
             letterSpacing: "-0.005em",

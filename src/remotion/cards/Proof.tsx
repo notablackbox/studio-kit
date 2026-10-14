@@ -4,7 +4,7 @@ import type { Look } from "../Teaser.tsx";
 // The proof beat: one line, and beneath it the source it rests on, marked by a small green dot.
 export function Proof({ line, source, look }: { line: string; source: string; look: Look }) {
   const frame = useCurrentFrame();
-  const { u, margin, color } = look;
+  const { t, margin, color } = look;
   return (
     <AbsoluteFill
       style={{
@@ -18,8 +18,8 @@ export function Proof({ line, source, look }: { line: string; source: string; lo
         <h2
           style={{
             margin: 0,
-            maxWidth: 1400 * u,
-            fontSize: 96 * u,
+            maxWidth: Math.min(1400 * t, look.width - 2 * margin),
+            fontSize: 96 * t,
             fontWeight: 600,
             lineHeight: 1.06,
             letterSpacing: "-0.025em",
@@ -29,20 +29,20 @@ export function Proof({ line, source, look }: { line: string; source: string; lo
         >
           {line}
         </h2>
-        <div style={{ display: "flex", alignItems: "center", marginTop: 40 * u }}>
+        <div style={{ display: "flex", alignItems: "center", marginTop: 40 * t }}>
           <div
             style={{
-              width: 12 * u,
-              height: 12 * u,
+              width: 12 * t,
+              height: 12 * t,
               borderRadius: "50%",
               backgroundColor: color.productGreen,
-              marginRight: 18 * u,
+              marginRight: 18 * t,
               flexShrink: 0,
             }}
           />
           <div
             style={{
-              fontSize: 36 * u,
+              fontSize: 36 * t,
               fontWeight: 400,
               lineHeight: 1.3,
               color: color.silver,

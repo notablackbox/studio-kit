@@ -10,10 +10,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve, sep } from "node:path";
+import { basename, join, resolve, sep } from "node:path";
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
-import { FPS, scriptSeconds, teaserFrames, type TeaserProps } from "./remotion/Teaser.tsx";
+import { FPS, clipFrames, teaserFrames, type TeaserProps } from "./remotion/Teaser.tsx";
 
 // Exit codes: 0 done and report written, 2 refused before any work, 1 anything unexpected.
 // Refusals go to stdout, one line per problem, and write nothing at all.
@@ -25,11 +25,15 @@ const MAX_SECONDS = 60;
 const MIN_CLIPS = 3;
 const MAX_CLIPS = 5;
 const MAX_CAPTION = 60;
-const OUTPUTS = { teaser: "teaser.mp4", teaser4x5: "teaser-4x5.mp4", poster: "poster.png", report: "render-report.json" };
+const OUTPUTS = { teaser: "teaser.mp4", teaser4x5: "teaser-4x5.mp4", poster: "poster.png" };
+const REPORT = "render-report.json";
+const MINUTE = 60 * 1000;
+const RENDER_TIMEOUT = 15 * MINUTE;
+const TOOL_TIMEOUT = 5 * MINUTE;
 
 type Step = { name: string; ok: boolean; error: string };
 type Video = { file: string; durationSeconds: number; width: number; height: number; fps: number };
-type Report = {
+export type Report = {
   ok: boolean;
   date: string;
   steps: Step[];
@@ -55,7 +59,14 @@ function isPlainName(name: string): boolean {
   return name !== "" && name !== "." && name !== ".." && !name.includes("/") && !name.includes("\\") && !name.includes("\0");
 }
 
-const oneDecimal = (seconds: number) => (Math.round(seconds * 10) / 10).toFixed(1);
+// Seconds to one decimal, rounded away from the range they fall outside, so a line never
+// names a value inside the range it refuses (44.97 shows 44.9, 60.03 shows 60.1).
+function shownOutside(seconds: number, low: number, high: number): string {
+  const tenths = seconds * 10;
+  if (seconds < low) return (Math.floor(tenths + 1e-9) / 10).toFixed(1);
+  if (seconds > high) return (Math.ceil(tenths - 1e-9) / 10).toFixed(1);
+  return (Math.round(tenths) / 10).toFixed(1);
+}
 
 // Returns the script when it is valid, else one problem per entry.
 export function validateScript(raw: unknown, clipsDir: string): { script?: TeaserProps; problems: string[] } {
@@ -113,8 +124,9 @@ export function validateScript(raw: unknown, clipsDir: string): { script?: Tease
     } else if (typeof end !== "number" || !Number.isFinite(end) || end <= start) {
       problems.push(`${label}: out must be after in`);
       timingOk = false;
-    } else if (end - start < 1) {
-      problems.push(`${label}: runs ${oneDecimal(end - start)} seconds, want at least 1`);
+    } else if (clipFrames({ in: start, out: end }) < FPS) {
+      const seconds = clipFrames({ in: start, out: end }) / FPS;
+      problems.push(`${label}: runs ${shownOutside(seconds, 1, Infinity)} seconds, want at least 1`);
       timingOk = false;
     }
     if (!filled(entry.caption) || entry.caption.length > MAX_CAPTION) {
@@ -124,12 +136,13 @@ export function validateScript(raw: unknown, clipsDir: string): { script?: Tease
 
   if (countOk && timingOk) {
     const timed = clips as { in: number; out: number }[];
-    // Rounded to a microsecond so float noise never moves a script across 45 or 60.
-    const seconds = Math.round(scriptSeconds(timed) * 1e6) / 1e6;
-    if (seconds < MIN_SECONDS || seconds > MAX_SECONDS) {
-      problems.push(`script runs ${oneDecimal(seconds)} seconds, want ${MIN_SECONDS} to ${MAX_SECONDS}`);
+    // The gate counts whole frames, exactly as the composition will, so a master it lets
+    // through measures what was counted.
+    const frames = teaserFrames(timed);
+    if (frames < MIN_SECONDS * FPS || frames > MAX_SECONDS * FPS) {
+      const shown = shownOutside(frames / FPS, MIN_SECONDS, MAX_SECONDS);
+      problems.push(`script runs ${shown} seconds, want ${MIN_SECONDS} to ${MAX_SECONDS}`);
     } else {
-      const frames = teaserFrames(timed);
       const poster = raw.posterFrame;
       if (typeof poster !== "number" || !Number.isInteger(poster) || poster < 0 || poster >= frames) {
         problems.push(`posterFrame must be a whole frame from 0 to ${frames - 1}`);
@@ -141,38 +154,60 @@ export function validateScript(raw: unknown, clipsDir: string): { script?: Tease
   return { script: raw as unknown as TeaserProps, problems };
 }
 
-// A step's failure, in the kit's own words.
-class StepFailed extends Error {}
+// The seam to the outside world: one child process, run to the end or to its time limit.
+export type Runner = (
+  command: string,
+  args: string[],
+  options: { cwd?: string; timeoutMs: number },
+) => { status: number | null; stdout: string; stderr: string; timedOut: boolean };
 
-function run(command: string, args: string[], cwd?: string) {
+const spawnRunner: Runner = (command, args, { cwd, timeoutMs }) => {
   const result = spawnSync(command, args, {
     cwd,
     encoding: "utf8",
     maxBuffer: 256 * 1024 * 1024,
     stdio: ["ignore", "pipe", "pipe"],
+    timeout: timeoutMs,
+    killSignal: "SIGKILL",
   });
-  if (result.error) throw new StepFailed(`${command} could not be started`);
-  return result;
-}
+  const timedOut = (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT";
+  if (result.error && !timedOut) throw new StepFailed(`${command} could not be started`);
+  return { status: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "", timedOut };
+};
 
-// The tail of a tool's own output, on stderr only, for whoever reads the logs.
-function echoTail(text: string) {
-  const tail = text.split("\n").filter((line) => line.trim() !== "").slice(-20);
-  if (tail.length > 0) console.error(tail.join("\n"));
+// A step's failure, in the kit's own words.
+class StepFailed extends Error {}
+
+type Tools = { run: Runner; log: (line: string) => void };
+
+function call(tools: Tools, what: string, command: string, args: string[], timeoutMs: number, cwd?: string) {
+  const result = tools.run(command, args, { cwd, timeoutMs });
+  if (result.timedOut) throw new StepFailed(`${what} took longer than ${timeoutMs / MINUTE} minutes`);
+  if (result.status !== 0) {
+    // The tail of the tool's own output, on stderr only, for whoever reads the logs.
+    const tail = `${result.stdout}\n${result.stderr}`.split("\n").filter((line) => line.trim() !== "").slice(-20);
+    if (tail.length > 0) tools.log(tail.join("\n"));
+    throw new StepFailed(`${what} failed`);
+  }
+  return result;
 }
 
 type Probe = { width: number; height: number; fps: number; duration: number };
 
-function probe(file: string): Probe {
-  const result = run("ffprobe", [
+function probe(tools: Tools, file: string): Probe {
+  const result = call(tools, `ffprobe of ${basename(file)}`, "ffprobe", [
     "-v", "error",
     "-select_streams", "v:0",
     "-show_entries", "stream=width,height,r_frame_rate:format=duration",
     "-of", "json",
     file,
-  ]);
-  if (result.status !== 0) throw new StepFailed(`ffprobe could not read ${file.split(sep).pop()}`);
-  const parsed = JSON.parse(result.stdout);
+  ], TOOL_TIMEOUT);
+  let parsed: { streams?: Record<string, unknown>[]; format?: { duration?: unknown } };
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch {
+    throw new StepFailed(`ffprobe could not read ${basename(file)}`);
+  }
   const stream = parsed.streams?.[0] ?? {};
   const [num, den] = String(stream.r_frame_rate ?? "0/1").split("/").map(Number);
   return {
@@ -188,17 +223,13 @@ function probe(file: string): Probe {
 // 512 MB holds well over a second of 1080p frames, all one clip ever looks back on.
 const FRAME_CACHE_BYTES = 512 * 1024 * 1024;
 
-function remotion(args: string[], what: string) {
+function remotion(tools: Tools, args: string[], what: string, timeoutMs: number) {
   const flags = ["--log=error", `--offthreadvideo-cache-size-in-bytes=${FRAME_CACHE_BYTES}`];
-  const result = run("npx", ["remotion", ...args, ...flags], KIT_ROOT);
-  if (result.status !== 0) {
-    echoTail(`${result.stdout}\n${result.stderr}`);
-    throw new StepFailed(`${what} failed`);
-  }
+  call(tools, what, "npx", ["remotion", ...args, ...flags], timeoutMs, KIT_ROOT);
 }
 
-function measureVideo(out: string, file: string, width: number, height: number): Video {
-  const p = probe(join(out, file));
+function measureVideo(tools: Tools, out: string, file: string, width: number, height: number): Video {
+  const p = probe(tools, join(out, file));
   if (p.width !== width || p.height !== height) {
     throw new StepFailed(`${file} measures ${p.width}x${p.height}, want ${width}x${height}`);
   }
@@ -207,15 +238,17 @@ function measureVideo(out: string, file: string, width: number, height: number):
   return { file, durationSeconds: Math.round(p.duration * 100) / 100, width, height, fps: p.fps };
 }
 
-function work(script: TeaserProps, clipsDir: string, out: string): Report {
+const removeOutputs = (out: string) => {
+  for (const name of Object.values(OUTPUTS)) rmSync(join(out, name), { force: true });
+};
+
+// The work after the gate. Writes render-report.json once it has started, on success and on
+// failure; a failed run leaves the report alone in --out, with no outputs listed.
+export function work(script: TeaserProps, clipsDir: string, out: string, seam: Partial<Tools> = {}): Report {
+  const tools: Tools = { run: seam.run ?? spawnRunner, log: seam.log ?? ((line) => console.error(line)) };
   const used = [...new Set(script.clips.map((clip) => clip.file))];
   const report: Report = { ok: false, date: script.date, steps: [], outputs: {}, clips: used };
-
-  mkdirSync(out, { recursive: true });
-  for (const name of Object.values(OUTPUTS)) rmSync(join(out, name), { force: true });
-  const temp = mkdtempSync(join(tmpdir(), "studio-kit-render-"));
-  const publicDir = join(temp, "public");
-  const propsFile = join(temp, "props.json");
+  let temp = "";
 
   const step = (name: string, body: () => void): boolean => {
     try {
@@ -225,20 +258,31 @@ function work(script: TeaserProps, clipsDir: string, out: string): Report {
     } catch (error) {
       const message = error instanceof StepFailed ? error.message : "unexpected failure";
       report.steps.push({ name, ok: false, error: message });
-      console.error(`render: ${name}: ${message}`);
+      tools.log(`render: ${name}: ${message}`);
       return false;
     }
   };
 
+  mkdirSync(out, { recursive: true });
   try {
-    mkdirSync(publicDir);
-    const ok =
+    let publicDir = "";
+    let propsFile = "";
+    report.ok =
       step("transcode", () => {
+        removeOutputs(out);
+        try {
+          temp = mkdtempSync(join(tmpdir(), "studio-kit-render-"));
+          publicDir = join(temp, "public");
+          propsFile = join(temp, "props.json");
+          mkdirSync(publicDir);
+        } catch {
+          throw new StepFailed("the temp folder could not be made");
+        }
         const names = new Map<string, string>();
         used.forEach((file, i) => names.set(file, `clip-${String(i + 1).padStart(2, "0")}.mp4`));
         for (const file of used) {
           const target = join(publicDir, names.get(file)!);
-          const ffmpeg = run("ffmpeg", [
+          const ffmpeg = tools.run("ffmpeg", [
             "-y", "-loglevel", "error",
             "-i", join(clipsDir, file),
             "-an",
@@ -246,15 +290,17 @@ function work(script: TeaserProps, clipsDir: string, out: string): Report {
             "-pix_fmt", "yuv420p", "-r", String(FPS),
             "-movflags", "+faststart",
             target,
-          ]);
+          ], { timeoutMs: TOOL_TIMEOUT });
+          if (ffmpeg.timedOut) throw new StepFailed(`transcoding ${file} took longer than ${TOOL_TIMEOUT / MINUTE} minutes`);
           if (ffmpeg.status !== 0) {
-            echoTail(ffmpeg.stderr);
+            const tail = ffmpeg.stderr.split("\n").filter((line) => line.trim() !== "").slice(-20);
+            if (tail.length > 0) tools.log(tail.join("\n"));
             throw new StepFailed(`${file} could not be transcoded`);
           }
-          const length = probe(target).duration;
+          const length = probe(tools, target).duration;
           const latest = Math.max(...script.clips.filter((clip) => clip.file === file).map((clip) => clip.out));
           if (!(length + 1 / FPS >= latest)) {
-            throw new StepFailed(`${file} runs ${oneDecimal(length)} seconds, a clip wants it to ${oneDecimal(latest)}`);
+            throw new StepFailed(`${file} runs ${length.toFixed(2)} seconds, a clip wants it to ${latest.toFixed(2)}`);
           }
         }
         const props: TeaserProps = {
@@ -265,41 +311,58 @@ function work(script: TeaserProps, clipsDir: string, out: string): Report {
       }) &&
       step("render-teaser", () => {
         remotion(
+          tools,
           ["render", ENTRY, "Teaser", join(out, OUTPUTS.teaser), `--props=${propsFile}`, `--public-dir=${publicDir}`],
           "rendering Teaser",
+          RENDER_TIMEOUT,
         );
       }) &&
       step("render-teaser-4x5", () => {
         remotion(
+          tools,
           ["render", ENTRY, "TeaserSocial", join(out, OUTPUTS.teaser4x5), `--props=${propsFile}`, `--public-dir=${publicDir}`],
           "rendering TeaserSocial",
+          RENDER_TIMEOUT,
         );
       }) &&
       step("still-poster", () => {
         remotion(
+          tools,
           [
             "still", ENTRY, "Teaser", join(out, OUTPUTS.poster),
             `--props=${propsFile}`, `--public-dir=${publicDir}`, `--frame=${script.posterFrame}`,
           ],
           "rendering the poster still",
+          TOOL_TIMEOUT,
         );
       }) &&
       step("measure", () => {
-        const teaser = measureVideo(out, OUTPUTS.teaser, 1920, 1080);
-        const teaser4x5 = measureVideo(out, OUTPUTS.teaser4x5, 1080, 1350);
-        const still = probe(join(out, OUTPUTS.poster));
+        const teaser = measureVideo(tools, out, OUTPUTS.teaser, 1920, 1080);
+        const teaser4x5 = measureVideo(tools, out, OUTPUTS.teaser4x5, 1080, 1350);
+        const still = probe(tools, join(out, OUTPUTS.poster));
         if (still.width !== 1920 || still.height !== 1080) {
           throw new StepFailed(`${OUTPUTS.poster} measures ${still.width}x${still.height}, want 1920x1080`);
         }
-        report.outputs = { teaser, teaser4x5, poster: { file: OUTPUTS.poster, width: still.width, height: still.height } };
         if (teaser.durationSeconds < MIN_SECONDS || teaser.durationSeconds > MAX_SECONDS) {
-          throw new StepFailed(`teaser.mp4 runs ${oneDecimal(teaser.durationSeconds)} seconds, want ${MIN_SECONDS} to ${MAX_SECONDS}`);
+          const shown = shownOutside(teaser.durationSeconds, MIN_SECONDS, MAX_SECONDS);
+          throw new StepFailed(`teaser.mp4 runs ${shown} seconds, want ${MIN_SECONDS} to ${MAX_SECONDS}`);
         }
+        if (Math.abs(teaser4x5.durationSeconds - teaser.durationSeconds) > 1 / FPS + 0.005) {
+          throw new StepFailed(
+            `teaser-4x5.mp4 runs ${teaser4x5.durationSeconds} seconds, the master ${teaser.durationSeconds}`,
+          );
+        }
+        report.outputs = { teaser, teaser4x5, poster: { file: OUTPUTS.poster, width: still.width, height: still.height } };
       });
-    report.ok = ok;
+  } catch {
+    report.ok = false;
   } finally {
-    rmSync(temp, { recursive: true, force: true });
-    writeFileSync(join(out, OUTPUTS.report), JSON.stringify(report, null, 2) + "\n");
+    if (temp) rmSync(temp, { recursive: true, force: true });
+    if (!report.ok) {
+      removeOutputs(out);
+      report.outputs = {};
+    }
+    writeFileSync(join(out, REPORT), JSON.stringify(report, null, 2) + "\n");
   }
   return report;
 }

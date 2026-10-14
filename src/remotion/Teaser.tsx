@@ -12,10 +12,10 @@ import {
   type CalculateMetadataFunction,
 } from "remotion";
 import { TransitionSeries } from "@remotion/transitions";
-import palette from "../../brand/palette.json" with { type: "json" };
+import palette from "../../brand/palette.json";
 import { crossFade } from "./transitions.ts";
 import { Opening } from "./cards/Opening.tsx";
-import { LowerThird } from "./cards/LowerThird.tsx";
+import { LowerThird, captionBelowHeight } from "./cards/LowerThird.tsx";
 import { Proof } from "./cards/Proof.tsx";
 import { Closing } from "./cards/Closing.tsx";
 
@@ -40,18 +40,15 @@ export type TeaserProps = {
 
 export const clipFrames = (clip: Pick<CutClip, "in" | "out">): number => Math.round((clip.out - clip.in) * FPS);
 
-// Seconds: the clips' out minus in, summed, plus the three cards, less one cross-fade per join.
-export function scriptSeconds(clips: Pick<CutClip, "in" | "out">[]): number {
-  const footage = clips.reduce((sum, clip) => sum + (clip.out - clip.in), 0);
-  const cards = (OPENING_FRAMES + PROOF_FRAMES + CLOSING_FRAMES) / FPS;
-  const joins = ((clips.length + 2) * CROSSFADE_FRAMES) / FPS;
-  return footage + cards - joins;
-}
-
+// The length a script adds up to: the clips' out minus in, plus the three cards, less one
+// cross-fade per join. Each clip is counted in whole frames, as the composition plays it, so
+// the gate in render.ts and the rendered master agree to the frame.
 export function teaserFrames(clips: Pick<CutClip, "in" | "out">[]): number {
   const footage = clips.reduce((sum, clip) => sum + clipFrames(clip), 0);
   return OPENING_FRAMES + footage + PROOF_FRAMES + CLOSING_FRAMES - (clips.length + 2) * CROSSFADE_FRAMES;
 }
+
+export const scriptSeconds = (clips: Pick<CutClip, "in" | "out">[]): number => teaserFrames(clips) / FPS;
 
 export const calculateTeaserMetadata: CalculateMetadataFunction<TeaserProps> = ({ props }) => ({
   durationInFrames: teaserFrames(props.clips),
@@ -70,12 +67,14 @@ export function formatDate(iso: string): string {
   return `${Number(match[3])} ${MONTHS[Number(match[2]) - 1]} ${match[1]}`;
 }
 
-// What every card is handed: the grid, measured in the 16:9 frame's pixels and scaled by
-// frame width (u), and the palette. Colours come from brand/palette.json and nowhere else.
+// What every card is handed: the grid (u, the frame width over 1920, sets the margins), the
+// type scale (t: type and the spaces between lines are given in 16:9 pixels and multiplied by
+// t), and the palette. Colours come from brand/palette.json and nowhere else.
 export type Look = {
   width: number;
   height: number;
   u: number;
+  t: number;
   margin: number;
   social: boolean;
   font: string;
@@ -101,12 +100,16 @@ function settle(frame: number): CSSProperties {
 function useLook(): Look {
   const { width, height } = useVideoConfig();
   const u = width / 1920;
+  const social = height > width;
   return {
     width,
     height,
     u,
+    // 4:5 is watched on a phone: its type keeps the master's pixel sizes (headlines 72 to 112,
+    // the caption 48) rather than shrinking with the narrower frame.
+    t: social ? 1 : u,
     margin: 160 * u,
-    social: height > width,
+    social,
     font: FONT_FAMILY,
     color: {
       black: palette.black.hex,
@@ -155,9 +158,10 @@ function ClipScene({ clip, look }: { clip: CutClip; look: Look }) {
       </AbsoluteFill>
     );
   }
-  // 4:5: the clip at full frame width on black, nothing cropped, the caption beneath it.
+  // 4:5: the clip at full frame width on black, nothing cropped, the caption beneath it on
+  // the grid; the clip and its caption are centred together as one block.
   const clipHeight = (look.width * 9) / 16;
-  const top = Math.round((look.height - clipHeight) / 2 - 40 * look.u);
+  const top = Math.round((look.height - clipHeight - captionBelowHeight(look.t)) / 2);
   return (
     <AbsoluteFill style={{ backgroundColor: look.color.black }}>
       <div style={{ position: "absolute", left: 0, top, width: look.width, height: clipHeight }}>{video}</div>

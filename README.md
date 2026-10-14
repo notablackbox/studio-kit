@@ -141,7 +141,12 @@ second; `posterFrame` a whole frame inside the master.
 The length is the clips' `out` minus `in`, summed, plus the opening, proof and
 closing cards (90, 90 and 120 frames at 30 fps), less one 12 frame cross-fade
 for each join. Three whole 15 second clips run 45 + 10 - 2.0 = 53.0 seconds;
-the same clips cut to 5 seconds run 23.0 and are refused. The numbers are the
+the same clips cut to 5 seconds run 23.0 and are refused. Each clip is counted
+in whole frames (`round((out - in) * 30)`), exactly as the composition plays
+it, so a script the gate lets through renders the length it was counted at:
+12.31, 12.31 and 12.38 second clips make 1349 frames (44.97 seconds) and are
+refused. The refusal never names a value inside the range it refuses: under 45
+rounds down (`script runs 44.9 seconds`), over 60 rounds up (`60.1`). The numbers are the
 constants `src/remotion/Teaser.tsx` exports (`FPS`, `OPENING_FRAMES`,
 `PROOF_FRAMES`, `CLOSING_FRAMES`, `CROSSFADE_FRAMES`); `render.ts` sums with
 them and the compositions take their length from them through
@@ -160,11 +165,15 @@ Then, each a named step in `render-report.json`:
    nothing of the product is cropped).
 4. `still-poster`: `npx remotion still` of frame `posterFrame` to `poster.png`.
 5. `measure`: each output through ffprobe (duration, width, height, frame
-   rate). A master shorter than 45 or longer than 60 seconds fails this step.
+   rate). A master shorter than 45 or longer than 60 seconds fails this step,
+   and so does a reframe whose length is more than one frame off the master's.
 
-The temp folder is removed at the end, and `--out` holds the four outputs and
-nothing else. `render-report.json` is written once work has started, on
-success and on failure (`ok: false`, the failed step's `error`, exit 1):
+Each child process has a time limit (a render 15 minutes; ffmpeg, ffprobe and
+the still 5 minutes); running past it fails the step. The temp folder is
+removed at the end. On success `--out` holds the four outputs and nothing else;
+on failure it holds `render-report.json` alone, with `ok: false`, the failed
+step's `error`, empty `outputs`, and exit 1. The report is written once work
+has started, on success and on failure:
 
 ```json
 {
@@ -188,7 +197,9 @@ memory next to Chromium and the encoder).
 The film, in `src/remotion/`: an opening card (headline and sub), the clips with
 a one line lower third, a proof card (line and source), and a closing card with
 the stacked mark and wordmark, the closing line and the date (`13 October
-2026`). One 12 frame cross-fade between each. Black ground, warm white type,
+2026`). One 12 frame cross-fade between each. In the 4:5 reframe the type keeps
+the master's pixel sizes (headlines 72 to 112 px, the caption 48 px), and each
+clip and its caption are centred together as one block. Black ground, warm white type,
 silver for the supporting lines, product green only as a thin rule and a dot;
 Inter Regular and SemiBold from `brand/fonts`, loaded before any frame is
 taken; colours from `brand/palette.json` only; the brand SVGs shown as they

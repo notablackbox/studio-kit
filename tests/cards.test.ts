@@ -30,13 +30,15 @@ const clipFrames = props.clips.map((c) => Math.round((c.out - c.in) * FPS));
 const clipsTotal = clipFrames.reduce((a, b) => a + b, 0);
 const total = OPENING_FRAMES + clipsTotal + PROOF_FRAMES + CLOSING_FRAMES - (props.clips.length + 2) * CROSSFADE_FRAMES;
 const firstClipStart = OPENING_FRAMES - CROSSFADE_FRAMES;
+// Clip 2 starts at 0.5 s into its file, so its still exercises the trim.
+const secondClipStart = firstClipStart + clipFrames[0] - CROSSFADE_FRAMES;
 const proofStart = OPENING_FRAMES + clipsTotal - (props.clips.length + 1) * CROSSFADE_FRAMES;
 const closingStart = total - CLOSING_FRAMES;
 
 // One frame inside each card's span, clear of the cross-fades.
 const frames: Record<string, number> = {
   opening: Math.round(OPENING_FRAMES / 2),
-  clip: firstClipStart + Math.round(clipFrames[0] / 2),
+  clip: secondClipStart + Math.round(clipFrames[1] / 2),
   proof: proofStart + Math.round(PROOF_FRAMES / 2),
   closing: closingStart + Math.round(CLOSING_FRAMES / 2),
 };

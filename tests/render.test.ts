@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   CLOSING_FRAMES,
@@ -12,7 +12,10 @@ import {
   OPENING_FRAMES,
   PROOF_FRAMES,
   scriptSeconds,
+  teaserFrames,
+  type TeaserProps,
 } from "../src/remotion/Teaser.tsx";
+import { work, type Runner } from "../src/render.ts";
 
 const kitRoot = fileURLToPath(new URL("..", import.meta.url));
 
@@ -88,7 +91,7 @@ function probe(file: string) {
     [
       "-v", "error",
       "-select_streams", "v:0",
-      "-show_entries", "stream=codec_name,width,height,r_frame_rate:format=duration",
+      "-show_entries", "stream=codec_name,width,height,r_frame_rate,nb_frames:format=duration",
       "-of", "json",
       file,
     ],
@@ -103,6 +106,7 @@ function probe(file: string) {
     height: stream.height as number,
     rate: stream.r_frame_rate as string,
     duration: Number(parsed.format?.duration),
+    frames: Number(stream.nb_frames),
   };
 }
 
@@ -132,6 +136,40 @@ test("a script over 60 seconds is refused", () => {
   const run = render(ws, cutScript(clipsCut(12, names)));
   // 60 + 10 - 2.8 = 67.2
   assertRefused(ws, run, /^script runs 67\.2 seconds, want 45 to 60$/m);
+});
+
+// Clips whose in and out do not fall on frames: the gate must count frames the way the
+// composition does, so a script it lets through can never measure outside 45 to 60.
+function misaligned(outs: number[]): Clip[] {
+  return outs.map((out, i) => ({ file: `shot-0${i + 1}.webm`, in: 0, out, caption: captions[i % captions.length] }));
+}
+
+test("the gate counts frames as the composition does: 12.31, 12.31, 12.38 is 1349 frames and refused", () => {
+  const clips = misaligned([12.31, 12.31, 12.38]);
+  assert.equal(teaserFrames(clips), 1349);
+  const ws = workspace(clips.map((c) => c.file));
+  const run = render(ws, cutScript(clips));
+  // 44.97 seconds floors to 44.9: the line never says a number inside the range it refuses.
+  assertRefused(ws, run, /^script runs 44\.9 seconds, want 45 to 60$/m);
+});
+
+test("the gate counts frames as the composition does: 3 x 12.32 is 1350 frames, 45.0 seconds, and accepted", () => {
+  const clips = misaligned([12.32, 12.32, 12.32]);
+  assert.equal(teaserFrames(clips), 1350);
+  const ws = workspace(clips.map((c) => c.file));
+  const run = render(ws, cutScript(clips));
+  // Accepted: work starts, and the placeholder clips fail the transcode step, not the gate.
+  assert.equal(run.result.status, 1, run.output);
+  assert.doesNotMatch(run.result.stdout, /script runs/);
+  const report = JSON.parse(readFileSync(join(ws.out, "render-report.json"), "utf8"));
+  assert.equal(report.steps[0].name, "transcode");
+});
+
+test("a script just over 60 seconds by the frame count prints a value over 60", () => {
+  const clips = misaligned([10.567, 10.567, 10.567, 10.567, 10.567]);
+  assert.equal(teaserFrames(clips), 1801);
+  const ws = workspace(clips.map((c) => c.file));
+  assertRefused(ws, render(ws, cutScript(clips)), /^script runs 60\.1 seconds, want 45 to 60$/m);
 });
 
 test("a clip named ../x.webm is refused with exit 2", () => {
@@ -226,6 +264,112 @@ test("a clip ffmpeg cannot read fails the transcode step: report written, ok fal
   assert.deepEqual(kitTemp(ws), [], "the temp folder is removed on failure too");
 });
 
+// The steps after the transcode, without a render: work() takes the process runner as a seam,
+// and this one writes the files Remotion would and answers ffprobe with what it is told.
+type Fake = {
+  failOn?: (args: string[]) => "fail" | "timeout" | undefined;
+  measures?: Record<string, { duration: number; width: number; height: number; frames?: number }>;
+};
+
+function fakeRunner(fake: Fake, seen: { temp: string }): Runner {
+  return (command, args) => {
+    const ok = { status: 0, stdout: "", stderr: "", timedOut: false };
+    const target = args[args.length - 1];
+    if (command === "ffmpeg") {
+      seen.temp = dirname(dirname(target));
+      writeFileSync(target, "mp4");
+      return ok;
+    }
+    if (command === "ffprobe") {
+      const name = basename(target);
+      const m = fake.measures?.[name] ?? { duration: 15, width: 1920, height: 1080 };
+      const stream = { width: m.width, height: m.height, r_frame_rate: "30/1", nb_frames: String(m.frames ?? Math.round(m.duration * 30)) };
+      return { ...ok, stdout: JSON.stringify({ streams: [stream], format: { duration: String(m.duration) } }) };
+    }
+    // npx remotion render|still <entry> <composition> <output> ...
+    const output = args[4];
+    const verdict = fake.failOn?.(args);
+    if (verdict === "timeout") return { ...ok, status: null, timedOut: true };
+    writeFileSync(output, "partial");
+    if (verdict === "fail") return { ...ok, status: 1, stderr: "boom" };
+    return ok;
+  };
+}
+
+const goodMeasures = {
+  "teaser.mp4": { duration: 53, width: 1920, height: 1080, frames: 1590 },
+  "teaser-4x5.mp4": { duration: 53, width: 1080, height: 1350, frames: 1590 },
+  "poster.png": { duration: NaN, width: 1920, height: 1080 },
+};
+
+function runWork(fake: Fake) {
+  const ws = workspace(["shot-01.webm", "shot-02.webm", "shot-03.webm"]);
+  const seen = { temp: "" };
+  const script = cutScript(clipsCut(15)) as unknown as TeaserProps;
+  const report = work(script, ws.clips, ws.out, { run: fakeRunner(fake, seen), log: () => {} });
+  assert.ok(seen.temp, "the transcode wrote into a temp folder");
+  assert.equal(existsSync(seen.temp), false, "the temp folder is removed");
+  return { ws, report, files: readdirSync(ws.out).sort() };
+}
+
+test("seam check: with every step passing, work leaves the four outputs and a full report", () => {
+  const { report, files } = runWork({ measures: goodMeasures });
+  assert.equal(report.ok, true);
+  assert.deepEqual(files, ["poster.png", "render-report.json", "teaser-4x5.mp4", "teaser.mp4"]);
+  assert.equal(report.outputs.teaser?.durationSeconds, 53);
+});
+
+test("a failure after render-teaser leaves only render-report.json, with no outputs", () => {
+  const { report, files, ws } = runWork({
+    measures: goodMeasures,
+    failOn: (args) => (args.includes("TeaserSocial") ? "fail" : undefined),
+  });
+  assert.deepEqual(files, ["render-report.json"]);
+  const written = JSON.parse(readFileSync(join(ws.out, "render-report.json"), "utf8"));
+  assert.deepEqual(written, report);
+  assert.equal(written.ok, false);
+  assert.deepEqual(written.outputs, {});
+  assert.deepEqual(
+    written.steps.map((s: { name: string; ok: boolean }) => [s.name, s.ok]),
+    [["transcode", true], ["render-teaser", true], ["render-teaser-4x5", false]],
+  );
+  assert.match(written.steps[2].error, /TeaserSocial/);
+});
+
+test("a step that runs past its time limit fails in the kit's words", () => {
+  const { report, files } = runWork({
+    measures: goodMeasures,
+    failOn: (args) => (args.includes("Teaser") && args[1] === "render" ? "timeout" : undefined),
+  });
+  assert.deepEqual(files, ["render-report.json"]);
+  assert.equal(report.steps[1].name, "render-teaser");
+  assert.match(report.steps[1].error, /took longer than 15 minutes/);
+});
+
+test("measure fails a reframe whose length is off the master by more than a frame, and removes the outputs", () => {
+  const { report, files } = runWork({
+    measures: { ...goodMeasures, "teaser-4x5.mp4": { duration: 52.9, width: 1080, height: 1350 } },
+  });
+  assert.deepEqual(files, ["render-report.json"]);
+  assert.equal(report.ok, false);
+  assert.deepEqual(report.outputs, {});
+  const last = report.steps[report.steps.length - 1];
+  assert.equal(last.name, "measure");
+  assert.match(last.error, /teaser-4x5\.mp4/);
+});
+
+test("measure fails a master outside 45 to 60, and removes the outputs", () => {
+  const { report, files } = runWork({
+    measures: {
+      ...goodMeasures,
+      "teaser.mp4": { duration: 44.5, width: 1920, height: 1080 },
+      "teaser-4x5.mp4": { duration: 44.5, width: 1080, height: 1350 },
+    },
+  });
+  assert.deepEqual(files, ["render-report.json"]);
+  assert.match(report.steps[report.steps.length - 1].error, /teaser\.mp4 runs 44\.5 seconds, want 45 to 60/);
+});
+
 test(
   "three whole 15 second clips render a master, a 4:5 reframe and a poster, measured in the report",
   { timeout: 20 * 60 * 1000 },
@@ -269,6 +413,7 @@ test(
     assert.equal(master.height, 1080);
     assert.equal(master.rate, "30/1");
     assert.ok(Math.abs(master.duration - sum) <= 0.5, `master runs ${master.duration}, sum ${sum}`);
+    assert.equal(master.frames, teaserFrames(clips), "the master holds exactly the frames the gate counted");
     assert.ok(master.duration >= 45 && master.duration <= 60);
 
     const social = probe(join(ws.out, "teaser-4x5.mp4"));
@@ -277,6 +422,7 @@ test(
     assert.equal(social.height, 1350);
     assert.equal(social.rate, "30/1");
     assert.ok(Math.abs(social.duration - sum) <= 0.5, `reframe runs ${social.duration}, sum ${sum}`);
+    assert.ok(Math.abs(social.duration - master.duration) <= 1 / FPS, `reframe ${social.duration}, master ${master.duration}`);
 
     const poster = readFileSync(join(ws.out, "poster.png"));
     assert.deepEqual([...poster.subarray(0, 8)], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
