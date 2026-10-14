@@ -1,7 +1,7 @@
-import { before, test } from "node:test";
+import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -67,6 +67,11 @@ before(() => {
   }
   propsFile = join(dir, "props.json");
   writeFileSync(propsFile, JSON.stringify(props));
+});
+
+// The stills and the clips are removed once the file's tests are done.
+after(() => {
+  if (dir) rmSync(dir, { recursive: true, force: true });
 });
 
 for (const [card, frame] of Object.entries(frames)) {
