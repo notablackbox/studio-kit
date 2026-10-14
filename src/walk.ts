@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -149,6 +150,8 @@ function writeReport(out: string, date: string, synthetic: boolean, results: Sho
   let existing: Partial<Report> | null = null;
   if (merge) {
     try {
+      // Only a report that is a plain file in --out is merged; a symlink is never followed.
+      if (!lstatSync(reportPath).isFile()) throw new Error("not a plain file");
       const parsed = JSON.parse(readFileSync(reportPath, "utf8"));
       if (isObject(parsed) && Array.isArray(parsed.shots)) existing = parsed as Partial<Report>;
     } catch {
@@ -167,7 +170,15 @@ function writeReport(out: string, date: string, synthetic: boolean, results: Sho
   } else {
     report = summarize(date, synthetic, results);
   }
-  writeFileSync(reportPath, JSON.stringify(report, null, 2) + "\n");
+  // Written to a fresh name (opened exclusively) and renamed over the report, which replaces a
+  // symlink rather than writing through it.
+  const temp = join(out, `.walk-report.json.${randomUUID()}.tmp`);
+  try {
+    writeFileSync(temp, JSON.stringify(report, null, 2) + "\n", { flag: "wx" });
+    renameSync(temp, reportPath);
+  } finally {
+    rmSync(temp, { force: true });
+  }
 }
 
 function result(shot: Shot, route: string, usedFallback: boolean, error: string, seconds = shot.dwell): ShotResult {
@@ -221,6 +232,10 @@ const SETTLE_MARGIN_MS = 100;
 // The page is held this long after the dwell, so the video runs past the cut's end.
 const TAIL_MS = 800;
 const TRIM_TIMEOUT_MS = 5 * 60 * 1000;
+
+// The report's seconds: the measured length rounded down to one decimal, so it never claims
+// more than the file holds. The small epsilon keeps 2.3 (22.999... tenths in floating point) 2.3.
+export const reportSeconds = (measured: number): number => Math.floor(measured * 10 + 1e-9) / 10;
 
 function runTool(command: string, args: string[]): Promise<{ status: number | null; stdout: string }> {
   return new Promise((done) => {
@@ -474,7 +489,7 @@ async function realWalk(
             renameSync(trimmed, join(out, clipName(shot.n)));
             written[written.indexOf(trimmed)] = join(out, clipName(shot.n));
             rmSync(videoPath, { force: true });
-            seconds = Math.round(measured * 10) / 10;
+            seconds = reportSeconds(measured);
           } catch {
             error = "clip not written";
           }

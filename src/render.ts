@@ -598,19 +598,17 @@ const within = (inner: string, outer: string): boolean => {
   return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 };
 
-// --out must be a folder (or not exist yet), and apart from --clips: render removes and writes
-// its own names in --out, and must never touch a clip.
+// --out must be a folder (or not exist yet), and neither --clips nor inside it: render writes
+// into --out, and must never write among the clips. A --clips folder below --out is fine
+// (`--clips /work/raw/<date> --out /work`): render writes only its fixed names at the top of
+// --out, and no clip may carry one of those names.
 export function checkOut(out: string, clipsDir: string): string[] {
   try {
     if (existsSync(out) && !statSync(out).isDirectory()) return ["--out is not a folder"];
   } catch {
     return ["--out is not a folder"];
   }
-  const outReal = realFolder(out);
-  const clipsReal = realFolder(clipsDir);
-  if (within(outReal, clipsReal) || within(clipsReal, outReal)) {
-    return ["--out and --clips must be separate folders, neither inside the other"];
-  }
+  if (within(realFolder(out), realFolder(clipsDir))) return ["--out must not be the --clips folder or inside it"];
   return [];
 }
 

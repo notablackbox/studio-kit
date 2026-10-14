@@ -474,7 +474,9 @@ test("a real clip starts on the settled page and runs the dwell; seconds is the 
     assert.equal(p.rate, "30/1");
     // No clicks on this route: the clip is the dwell.
     assert.ok(Math.abs(p.duration - dwell) <= 0.4, `clip runs ${p.duration} s, dwell ${dwell} s`);
-    assert.ok(Math.abs(report.shots[0].seconds - p.duration) <= 0.1, `seconds ${report.shots[0].seconds}, file ${p.duration}`);
+    // Rounded down to one decimal: never more than the file holds, less by under 0.1 s.
+    const s0 = report.shots[0].seconds;
+    assert.ok(s0 <= p.duration && p.duration - s0 < 0.1, `seconds ${s0}, file ${p.duration}`);
     assert.equal(report.shots[0].seconds, Math.round(report.shots[0].seconds * 10) / 10, "one decimal");
     const [r, g, b] = firstFrameCentre(clip);
     t.diagnostic(`clip ${p.duration} s, seconds ${report.shots[0].seconds}, first frame centre rgb(${r}, ${g}, ${b})`);

@@ -121,14 +121,18 @@ Shot list values in a problem line are printed JSON-quoted, so a control charact
 `walk-report.json` holds `date`, `synthetic`, a `shots` list (`n`, `surface`,
 `route`, `ok`, `file`, `seconds`, `status` of `recorded` or `failed`, `error`,
 `usedFallback`), and the counts `recorded` and `failed`. `seconds` is the clip's
-length as ffprobe measures it, to one decimal: on a real walk the clicks and the
-dwell, give or take a frame or two; on a synthetic one the `dwell`. A failed
+length as ffprobe measures it, rounded down to one decimal so it never claims
+more than the file holds: on a real walk the clicks and the dwell, give or take
+a frame or two; on a synthetic one the `dwell`. A failed
 shot has `file` empty and `seconds` 0. `error` is one of `settle selector not
 found`, `click target not found`, `page did not load`, `page did not answer`,
 `page answered NNN`, `route leaves the walk host`, `clip could not be trimmed`,
 `clip not written` or `shot failed`. `route` is the path
 opened. `usedFallback` is true when that path is a fallback: under `--only`, or
 when the shot names a path that is some entry's `fallback` and no entry's `route`.
+The report is written to a fresh name in `--out` and renamed into place, so a
+symlink at `walk-report.json` is replaced, never written through; `--only`
+merges only a report that is a plain file.
 
 ## `render`
 
@@ -154,8 +158,9 @@ line naming the field (`opening.headline runs 61 characters, want at most 60`);
 each clip at least one second; `posterFrame` a whole frame inside the master; no
 clip named like one of render's own outputs (`teaser.mp4`, `teaser-4x5.mp4`,
 `poster.png`, `render-report.json`); and `--out` a folder (or not there yet)
-apart from `--clips`: the same folder, or either one inside the other, is
-refused. Captions and card text are counted as Unicode characters (code points),
+that is neither `--clips` nor inside it. A `--clips` folder below `--out` is
+fine (`--clips /work/raw/<date> --out /work`): render writes only its own fixed
+names at the top of `--out`. Captions and card text are counted as Unicode characters (code points),
 not UTF-16 units, so an emoji counts as one. Values from the script are printed
 JSON-quoted, as walk prints them, so one problem is always one line.
 
@@ -300,7 +305,7 @@ for what the input held; a value from the input is printed JSON-quoted.
   `script runs X seconds, want 45 to 60`,
   `posterFrame must be a whole frame from 0 to N`
 - `--out is not a folder`
-- `--out and --clips must be separate folders, neither inside the other`
+- `--out must not be the --clips folder or inside it`
 
 `changelog`:
 

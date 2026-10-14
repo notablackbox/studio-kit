@@ -25,7 +25,7 @@ import {
   teaserFrames,
   type TeaserProps,
 } from "../src/remotion/Teaser.tsx";
-import { runProcess, work, type Runner } from "../src/render.ts";
+import { checkOut, runProcess, validateScript, work, type Runner } from "../src/render.ts";
 
 const kitRoot = fileURLToPath(new URL("..", import.meta.url));
 
@@ -332,19 +332,35 @@ for (const { field, limit, set } of cardFields) {
   });
 }
 
-test("--out that is --clips, inside it, or around it is refused before any work", () => {
-  for (const [clips, out] of [["clips", "clips"], ["clips", "clips/out"], ["out/clips", "out"]]) {
+test("--out that is --clips, or inside it, is refused before any work", () => {
+  for (const [clips, out] of [["clips", "clips"], ["clips", "clips/out"]]) {
     const ws = workspace();
     mkdirSync(join(ws.dir, clips), { recursive: true });
     for (const name of ["shot-01.webm", "shot-02.webm", "shot-03.webm"]) writeFileSync(join(ws.dir, clips, name), "x");
     const before = readdirSync(join(ws.dir, clips)).sort();
     const run = render(ws, cutScript(clipsCut(15)), { clips, out });
     assert.equal(run.result.status, 2, `${clips} ${out}: ${run.output}`);
-    assert.deepEqual(lines(run.result.stdout), ["--out and --clips must be separate folders, neither inside the other"]);
+    assert.deepEqual(lines(run.result.stdout), ["--out must not be the --clips folder or inside it"]);
     assert.deepEqual(readdirSync(join(ws.dir, clips)).sort(), before, "nothing written into --clips");
-    if (out !== clips && !clips.startsWith(`${out}/`)) assert.equal(existsSync(join(ws.dir, out)), false);
+    if (out !== clips) assert.equal(existsSync(join(ws.dir, out)), false);
     assert.deepEqual(kitTemp(ws), []);
   }
+});
+
+test("a --clips folder below --out passes the gate: the skill's /work and /work/raw/<date> shape", () => {
+  const work = tempDir("studio-kit-work-");
+  const clips = join(work, "raw", "2026-10-13");
+  mkdirSync(clips, { recursive: true });
+  for (const name of ["shot-01.webm", "shot-02.webm", "shot-03.webm"]) writeFileSync(join(clips, name), "x");
+  writeFileSync(join(work, "cutscript.json"), JSON.stringify(cutScript(clipsCut(15))));
+  assert.deepEqual(checkOut(work, clips), []);
+  const { script, problems } = validateScript(cutScript(clipsCut(15)), clips);
+  assert.deepEqual(problems, []);
+  assert.ok(script);
+  // The same through a subfolder named like the README's example, relative to INIT_CWD.
+  const ws = workspace();
+  mkdirSync(join(ws.dir, "out", "clips"), { recursive: true });
+  assert.deepEqual(checkOut(join(ws.dir, "out"), join(ws.dir, "out", "clips")), []);
 });
 
 test("a clip named like one of render's own outputs is refused", () => {
