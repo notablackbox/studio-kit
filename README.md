@@ -127,24 +127,72 @@ script holds `date`, `title`, an `opening` (`headline`, `sub`), three to five
 `closing` (`line`) and a `posterFrame`.
 
 It is refused with exit 2, before any transcode and with no report or file
-written, when there are fewer than 3 or more than 5 clips; when a `file` is not
-a plain name inside `--clips` or does not exist there; when an `out` is not
-after its `in`; or when the length adds up to under 45 or over 60 seconds. The
-refusal prints the sum, for example `script runs 38.4 seconds, want 45 to 60`.
+written, one line per problem, when there are fewer than 3 or more than 5
+clips; when a `file` is not a plain name inside `--clips` (no `/`, no `\`, not
+`.` or `..`) or does not exist there; when an `in` is negative or an `out` is
+not after its `in`; or when the length adds up to under 45 or over 60 seconds.
+The length refusal prints the sum, for example
+`script runs 38.4 seconds, want 45 to 60`. The rest of the shape is checked the
+same way: `date` a real `YYYY-MM-DD`; the opening's `headline` and `sub`, the
+proof's `line` and `source` and the closing's `line` not empty; each `caption`
+1 to 60 characters, so the lower third stays one line; each clip at least one
+second; `posterFrame` a whole frame inside the master.
 
 The length is the clips' `out` minus `in`, summed, plus the opening, proof and
 closing cards (90, 90 and 120 frames at 30 fps), less one 12 frame cross-fade
-for each join. Three whole 15 second clips run 45 + 10 - 2.0 = 53.0 seconds.
+for each join. Three whole 15 second clips run 45 + 10 - 2.0 = 53.0 seconds;
+the same clips cut to 5 seconds run 23.0 and are refused. The numbers are the
+constants `src/remotion/Teaser.tsx` exports (`FPS`, `OPENING_FRAMES`,
+`PROOF_FRAMES`, `CLOSING_FRAMES`, `CROSSFADE_FRAMES`); `render.ts` sums with
+them and the compositions take their length from them through
+`calculateMetadata`.
 
-Then, each a named step in `render-report.json`: transcode every used `.webm`
-to `.mp4` with ffmpeg; render `Teaser` to `teaser.mp4` (1920x1080, 30 fps,
-h264); render `TeaserSocial` to `teaser-4x5.mp4` (1080x1350, the same timeline
-with each clip at full frame width on black and the type beneath); render the
-`posterFrame` still to `poster.png`; measure each output with ffprobe. A master
-shorter than 45 or longer than 60 seconds fails the last step.
-`render-report.json` is written once work has started, on success and on
-failure (`ok: false`, exit 1); its `outputs.teaser.durationSeconds` is what the
-sweep reads.
+Then, each a named step in `render-report.json`:
+
+1. `transcode`: every used clip to `.mp4` (h264, 30 fps) with ffmpeg, into a
+   fresh folder in the system temp folder that Remotion is given as its
+   `--public-dir`; the props file sits beside it. A clip shorter than the `out`
+   asked of it fails here.
+2. `render-teaser`: `npx remotion render` of `Teaser` to `teaser.mp4`
+   (1920x1080, 30 fps, h264).
+3. `render-teaser-4x5`: `TeaserSocial` to `teaser-4x5.mp4` (1080x1350, the same
+   timeline with each clip at full frame width on black and the type beneath;
+   nothing of the product is cropped).
+4. `still-poster`: `npx remotion still` of frame `posterFrame` to `poster.png`.
+5. `measure`: each output through ffprobe (duration, width, height, frame
+   rate). A master shorter than 45 or longer than 60 seconds fails this step.
+
+The temp folder is removed at the end, and `--out` holds the four outputs and
+nothing else. `render-report.json` is written once work has started, on
+success and on failure (`ok: false`, the failed step's `error`, exit 1):
+
+```json
+{
+  "ok": true,
+  "date": "2026-10-13",
+  "steps": [{ "name": "transcode", "ok": true, "error": "" }],
+  "outputs": {
+    "teaser": { "file": "teaser.mp4", "durationSeconds": 53.0, "width": 1920, "height": 1080, "fps": 30 },
+    "teaser4x5": { "file": "teaser-4x5.mp4", "durationSeconds": 53.0, "width": 1080, "height": 1350, "fps": 30 },
+    "poster": { "file": "poster.png", "width": 1920, "height": 1080 }
+  },
+  "clips": ["shot-01.webm", "shot-02.webm", "shot-03.webm"]
+}
+```
+
+`clips` lists the files the script used. The sweep reads
+`outputs.teaser.durationSeconds`. Remotion's OffthreadVideo frame cache is held
+to 512 MB (its default is half the free memory, which ran a 6 GB box out of
+memory next to Chromium and the encoder).
+
+The film, in `src/remotion/`: an opening card (headline and sub), the clips with
+a one line lower third, a proof card (line and source), and a closing card with
+the stacked mark and wordmark, the closing line and the date (`13 October
+2026`). One 12 frame cross-fade between each. Black ground, warm white type,
+silver for the supporting lines, product green only as a thin rule and a dot;
+Inter Regular and SemiBold from `brand/fonts`, loaded before any frame is
+taken; colours from `brand/palette.json` only; the brand SVGs shown as they
+are.
 
 ## Brand sources
 
