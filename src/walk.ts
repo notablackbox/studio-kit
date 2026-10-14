@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
-import type { Browser, BrowserContext, Page } from "playwright";
+import type { Browser, BrowserContext, Page, Response } from "playwright";
 
 // Exit codes: 0 done and report written, 2 refused before any work, 1 anything unexpected.
 // Lines the skills read ("shot list ok", "session rejected", ...) go to stdout.
@@ -48,6 +48,14 @@ function pageFor(routes: Route[], shot: Shot, only: boolean): { route: string; u
   return { route, usedFallback };
 }
 
+// An untrusted value as it appears in a printed line: JSON-quoted, so a line break or an
+// escape sequence in a shot list can never start a line of its own. JSON.stringify leaves
+// DEL, the C1 controls and the Unicode line separators raw; those are escaped too.
+export function shown(value: unknown): string {
+  const text = JSON.stringify(value) ?? String(value);
+  return text.replace(/[\u007f-\u009f\u2028\u2029]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -84,9 +92,11 @@ export function validateShotList(raw: unknown, routes: Route[]): { list?: ShotLi
     if (typeof entry.route !== "string") problems.push(`${label}: route is missing`);
     else {
       owner = ownerOf(routes, entry.route);
-      if (!owner) problems.push(`${label}: route ${entry.route} is not in routes.json`);
+      if (!owner) problems.push(`${label}: route ${shown(entry.route)} is not in routes.json`);
       else if (typeof entry.surface === "string" && entry.surface !== owner.surface) {
-        problems.push(`${label}: surface ${entry.surface} does not match ${owner.surface} for route ${entry.route}`);
+        problems.push(
+          `${label}: surface ${shown(entry.surface)} does not match ${shown(owner.surface)} for route ${shown(entry.route)}`,
+        );
       }
     }
 
@@ -94,7 +104,9 @@ export function validateShotList(raw: unknown, routes: Route[]): { list?: ShotLi
       problems.push(`${label}: clicks must be a list of selectors`);
     } else if (owner) {
       for (const click of entry.clicks as string[]) {
-        if (!owner.clicks.includes(click)) problems.push(`${label}: click ${click} is not listed for ${entry.route}`);
+        if (!owner.clicks.includes(click)) {
+          problems.push(`${label}: click ${shown(click)} is not listed for ${shown(entry.route)}`);
+        }
       }
     }
   });
@@ -270,7 +282,42 @@ async function realWalk(
       let error = "";
       let dead = false;
       let leftHost = false;
+      let page: Page | undefined;
+      // Every page's video, popups included; all but the shot's own are removed after close.
+      const videos: Promise<string>[] = [];
+      context.on("page", (p) => {
+        const video = p.video();
+        if (video) videos.push(video.path());
+      });
       try {
+        // Popups. A page other than the shot's own never loads a document: its first
+        // top-level request, and any later one, is aborted here. context.route sees a
+        // popup's very first request (Playwright holds new targets until their routes are
+        // in place), and since no popup document request is ever let through, none can
+        // follow a redirect. One aimed at another origin fails the shot.
+        await context.route("**/*", async (route, request) => {
+          let top = true;
+          let owner: Page | undefined;
+          try {
+            const frame = request.frame();
+            top = frame.parentFrame() === null;
+            owner = frame.page();
+          } catch {
+            owner = undefined;
+          }
+          if (request.resourceType() === "document" && top && (page === undefined || owner !== page)) {
+            let outside = true;
+            try {
+              outside = new URL(request.url()).origin !== walkUrl.origin;
+            } catch {
+              outside = true;
+            }
+            if (outside) leftHost = true;
+            await route.abort("blockedbyclient").catch(() => {});
+            return;
+          }
+          await route.fallback().catch(() => {});
+        });
         const cookie = (name: string) => ({
           name,
           value: session.accessToken,
@@ -282,31 +329,32 @@ async function realWalk(
           expires: session.expiresAt,
         });
         await context.addCookies([cookie("access_token"), cookie("refresh_token")]);
-        const guard = async (p: Page) => {
-          await holdToHost(context, p, walkUrl.origin, () => {
-            leftHost = true;
-          });
-        };
-        context.on("page", (p) => {
-          guard(p).catch(() => {});
+        page = await context.newPage();
+        // The shot's own page: every top-level document request, redirect hops included.
+        await holdToHost(context, page, walkUrl.origin, () => {
+          leftHost = true;
         });
-        const page = await context.newPage();
-        await guard(page);
         const video = page.video();
         if (video) videoPath = await video.path();
         if (videoPath) written.push(videoPath);
 
         const target = new URL(route, walkUrl);
+        let response: Response | null = null;
         if (target.origin !== walkUrl.origin) error = "route leaves the walk host";
         else {
           try {
-            await page.goto(target.href, { waitUntil: "domcontentloaded" });
+            response = await page.goto(target.href, { waitUntil: "domcontentloaded" });
           } catch {
             error = leftHost ? "route leaves the walk host" : "page did not load";
           }
         }
         if (leftHost && error !== "") error = "route leaves the walk host";
-        if (error === "" && i === 0 && new URL(page.url()).pathname === "/login") dead = true;
+        // Any shot whose first navigation lands on /login: the session is dead.
+        if (error === "" && new URL(page.url()).pathname === "/login") dead = true;
+        if (error === "" && !dead) {
+          if (response === null) error = "page did not answer";
+          else if (response.status() >= 400) error = `page answered ${response.status()}`;
+        }
         if (error === "" && !dead) {
           try {
             await page.waitForSelector(settle, { timeout: SETTLE_TIMEOUT_MS });
@@ -330,6 +378,10 @@ async function realWalk(
         if (error === "") error = "shot failed";
       } finally {
         await context.close().catch(() => {});
+        // A popup's video is never kept: nothing untracked lands in --out.
+        for (const settled of await Promise.allSettled(videos)) {
+          if (settled.status === "fulfilled" && settled.value !== videoPath) rmSync(settled.value, { force: true });
+        }
       }
 
       if (dead) {
@@ -371,7 +423,8 @@ async function main(): Promise<number> {
       },
     }).values;
   } catch (error) {
-    console.error(`walk: ${(error as Error).message}`);
+    // The message can quote an argument: keep it on one line.
+    console.error(`walk: ${shown((error as Error).message).slice(1, -1)}`);
     return 2;
   }
   if (!values.shotlist) {

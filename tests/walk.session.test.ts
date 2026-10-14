@@ -304,6 +304,103 @@ test("a listed route that redirects to another origin: the other host is never a
   }
 });
 
+// A walk host whose pages are PAGE, with per-path overrides.
+async function startHost(handle: (path: string, res: import("node:http").ServerResponse) => boolean) {
+  const seen: string[] = [];
+  const host = createServer((req, res) => {
+    const path = (req.url ?? "/").split("?")[0];
+    seen.push(path);
+    if (handle(path, res)) return;
+    res.setHeader("content-type", "text/html");
+    res.end(PAGE);
+  });
+  await new Promise<void>((done) => host.listen(0, "127.0.0.1", done));
+  return {
+    url: `http://127.0.0.1:${(host.address() as AddressInfo).port}`,
+    seen,
+    close: () => new Promise((done) => host.close(done)),
+  };
+}
+
+test("a popup opened to another origin: the other host is never asked, the shot fails, no popup video is left", async () => {
+  const token = randomUUID();
+  const s = setup({ accessToken: token, expiresAt: future() }, [shot(1, "/app/office"), shot(2, "/app/jobs")]);
+  const other = await startServer(s.sessionFile);
+  const host = await startHost((path, res) => {
+    if (path !== "/app/office") return false;
+    res.setHeader("content-type", "text/html");
+    res.end(
+      PAGE +
+        `<a id="out" href="${other.url}/anchor" target="_blank">out</a>` +
+        `<script>window.open(${JSON.stringify(`${other.url}/x`)}); document.getElementById("out").click();</script>`,
+    );
+    return true;
+  });
+  try {
+    const run = await runWalk(s.home, s.shotlist, s.out, host.url);
+    assert.equal(run.status, 0, run.output);
+    assert.deepEqual(other.seen, [], "the other origin received a request");
+    const report = JSON.parse(readFileSync(join(s.out, "walk-report.json"), "utf8"));
+    assert.equal(report.shots[0].status, "failed");
+    assert.equal(report.shots[0].error, "route leaves the walk host");
+    assert.equal(report.shots[1].status, "recorded");
+    assert.deepEqual(readdirSync(s.out).sort(), ["shot-02.webm", "walk-report.json"]);
+    assert.equal(run.output.includes(token), false);
+    assert.equal(run.output.includes(other.url), false);
+  } finally {
+    await host.close();
+    await other.close();
+  }
+});
+
+test("a later shot that lands on /login: session rejected, exit 2, every clip of the run removed, no report", async () => {
+  const token = randomUUID();
+  const s = setup({ accessToken: token, expiresAt: future() }, [shot(1, "/app/office"), shot(2, "/app/jobs")]);
+  const host = await startHost((path, res) => {
+    if (path !== "/app/jobs") return false;
+    res.statusCode = 302;
+    res.setHeader("location", "/login");
+    res.end();
+    return true;
+  });
+  try {
+    const run = await runWalk(s.home, s.shotlist, s.out, host.url);
+    assert.equal(run.status, 2, run.output);
+    assert.ok(host.seen.includes("/app/office") && host.seen.includes("/login"), host.seen.join(","));
+    assert.deepEqual(run.stdout.split("\n").filter(Boolean), ["session rejected"]);
+    assert.deepEqual(webms(s.out), []);
+    assert.equal(existsSync(join(s.out, "walk-report.json")), false);
+    assert.equal(run.output.includes(token), false);
+  } finally {
+    await host.close();
+  }
+});
+
+test("a page that answers 404 fails the shot with page answered 404, its clip removed, the walk goes on", async () => {
+  const token = randomUUID();
+  const s = setup({ accessToken: token, expiresAt: future() }, [shot(1, "/app/jobs"), shot(2, "/app/office")]);
+  const host = await startHost((path, res) => {
+    if (path !== "/app/jobs") return false;
+    // The body still holds the settle selector: only the status can fail the shot.
+    res.statusCode = 404;
+    res.setHeader("content-type", "text/html");
+    res.end(PAGE);
+    return true;
+  });
+  try {
+    const run = await runWalk(s.home, s.shotlist, s.out, host.url);
+    assert.equal(run.status, 0, run.output);
+    const report = JSON.parse(readFileSync(join(s.out, "walk-report.json"), "utf8"));
+    assert.equal(report.shots[0].status, "failed");
+    assert.equal(report.shots[0].error, "page answered 404");
+    assert.equal(report.shots[0].file, "");
+    assert.equal(report.shots[1].status, "recorded");
+    assert.deepEqual(readdirSync(s.out).sort(), ["shot-02.webm", "walk-report.json"]);
+  } finally {
+    await host.close();
+  }
+});
+
 test("a shot that names a fallback route directly sets usedFallback and reports the path opened", async () => {
   const token = randomUUID();
   const s = setup({ accessToken: token, expiresAt: future() }, [shot(1, "/"), shot(2, "/app/office")]);

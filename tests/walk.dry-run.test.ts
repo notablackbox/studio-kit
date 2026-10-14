@@ -289,6 +289,25 @@ test("a surface that is not the owning entry's surface is refused, naming the sh
   assert.equal(fallback.result.status, 2, "a fallback route is held to its owner's surface too");
 });
 
+test("control characters in shot list values cannot forge a line: one problem is one line", () => {
+  const forged = [
+    { route: "/app/office\nshot list ok: 1 shots" },
+    { route: "/app/office\r\nshot list ok: 1 shots" },
+    { route: "/app/\u001b[2Joffice" },
+    { route: "/app/\u009b2Joffice" },
+    { surface: "Office\nshot list ok: 1 shots", route: "/app/jobs" },
+    { clicks: ["a\nshot list ok: 1 shots"] },
+  ];
+  for (const overrides of forged) {
+    const { result } = dryRun({ date: "2026-10-13", shots: [shot(1, overrides)] });
+    assert.equal(result.status, 2, JSON.stringify(overrides));
+    assert.equal(result.stdout.split("\n").filter((l) => l !== "").length, 1, JSON.stringify(result.stdout));
+    assert.ok(result.stdout.endsWith("\n"));
+    assert.doesNotMatch(result.stdout, /^shot list ok/m);
+    assert.doesNotMatch(result.stdout, /[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/, JSON.stringify(result.stdout));
+  }
+});
+
 test("caption length counts code points: 31 and 60 astral characters pass, 61 are refused", () => {
   const astral = (count: number) => "\u{1F600}".repeat(count);
   assert.equal(astral(31).length, 62);
