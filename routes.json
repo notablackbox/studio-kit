@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "routes": [
+    {
+      "surface": "Office",
+      "route": "/app/office",
+      "settle": "main",
+      "clicks": [],
+      "fallback": "/app/office/methodology"
+    },
+    {
+      "surface": "Home",
+      "route": "/app/home",
+      "settle": "[role=\"group\"][aria-label=\"Focus or board view\"]",
+      "clicks": [],
+      "fallback": "/"
+    },
+    {
+      "surface": "People",
+      "route": "/app/employees",
+      "settle": "[data-page-frame]",
+      "clicks": [],
+      "fallback": "/app/employees/org-chart"
+    },
+    {
+      "surface": "Claws",
+      "route": "/app/claws/supervise",
+      "settle": "[data-slot=\"page-header\"] h1",
+      "clicks": [],
+      "fallback": "/app/claws/manage"
+    },
+    {
+      "surface": "Hiring",
+      "route": "/app/jobs",
+      "settle": "section[aria-label=\"Jobs\"]",
+      "clicks": [],
+      "fallback": "/app/campaigns"
+    }
+  ]
+}
