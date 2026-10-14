@@ -1,11 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const kitRoot = resolve(import.meta.dirname, "..");
+const kitRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 
 function run(entry: string) {
   const dir = mkdtempSync(join(tmpdir(), "studio-kit-changelog-"));
@@ -86,10 +87,52 @@ test("a first line with no date exits 2 and writes no file", () => {
   assert.equal(existsSync(output), false);
 });
 
-test("missing flags exit 2", () => {
-  const result = spawnSync(process.execPath, ["--import", "tsx", "src/changelog.ts"], {
+test("missing flags exit 2 and write nothing", () => {
+  const dir = mkdtempSync(join(tmpdir(), "studio-kit-changelog-"));
+  const input = join(dir, "entry.md");
+  writeFileSync(input, "## 2026-10-13\n- One change\nClosing line.\n");
+  const bare = spawnSync(process.execPath, ["--import", "tsx", "src/changelog.ts"], {
     cwd: kitRoot,
     encoding: "utf8",
+    env: { ...process.env, INIT_CWD: dir },
   });
-  assert.equal(result.status, 2);
+  assert.equal(bare.status, 2);
+  const noOut = spawnSync(process.execPath, ["--import", "tsx", "src/changelog.ts", "--in", input], {
+    cwd: kitRoot,
+    encoding: "utf8",
+    env: { ...process.env, INIT_CWD: dir },
+  });
+  assert.equal(noOut.status, 2);
+  assert.deepEqual(readdirSync(dir), ["entry.md"]);
+});
+
+for (const heading of ["## 2026-99-99", "## 31 February 2026", "## 29 February 2026"]) {
+  test(`an impossible date (${heading.slice(3)}) exits 2 and writes no file`, () => {
+    const { result, output, html } = run(`${heading}\n- One change\nClosing line.\n`);
+    assert.equal(result.status, 2);
+    assert.equal(html, null);
+    assert.equal(existsSync(output), false);
+  });
+}
+
+test("a real leap day writes a card", () => {
+  const { result, html } = run("## 29 February 2028\n- One change\nClosing line.\n");
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(html);
+  assert.match(html, /<h2>29 February 2028<\/h2>/);
+});
+
+test("a leading dash or star marker is dropped from change lines and the closing line", () => {
+  const { result, html } = run("## 2026-10-13\n- Dash change\n* Star change\n* Star closing.\n");
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(html);
+  assert.match(html, /<li>Dash change<\/li>/);
+  assert.match(html, /<li>Star change<\/li>/);
+  assert.match(html, /<p>Star closing\.<\/p>/);
+  assert.doesNotMatch(html, /[-*] (Dash|Star)/);
+
+  const dashClosing = run("## 2026-10-13\n* Star change\n- Dash closing.\n");
+  assert.equal(dashClosing.result.status, 0, dashClosing.result.stderr);
+  assert.ok(dashClosing.html);
+  assert.match(dashClosing.html, /<p>Dash closing\.<\/p>/);
 });

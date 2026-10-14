@@ -6,11 +6,25 @@ import { parseArgs } from "node:util";
 
 const MONTHS =
   "January|February|March|April|May|June|July|August|September|October|November|December";
-const ISO_DATE = /\b\d{4}-\d{2}-\d{2}\b/;
-const LONG_DATE = new RegExp(`\\b\\d{1,2} (?:${MONTHS}) \\d{4}\\b`, "i");
+const MONTH_NAMES = MONTHS.toLowerCase().split("|");
+const ISO_DATE = /\b(\d{4})-(\d{2})-(\d{2})\b/g;
+const LONG_DATE = new RegExp(`\\b(\\d{1,2}) (${MONTHS}) (\\d{4})\\b`, "gi");
+
+// True when the year, month and day form a real calendar date.
+function isRealDate(y: number, m: number, d: number): boolean {
+  const date = new Date(Date.UTC(y, m - 1, d));
+  return date.getUTCFullYear() === y && date.getUTCMonth() === m - 1 && date.getUTCDate() === d;
+}
 
 export function hasDate(heading: string): boolean {
-  return ISO_DATE.test(heading) || LONG_DATE.test(heading);
+  for (const [, y, m, d] of heading.matchAll(ISO_DATE)) {
+    if (isRealDate(Number(y), Number(m), Number(d))) return true;
+  }
+  for (const [, d, name, y] of heading.matchAll(LONG_DATE)) {
+    const m = MONTH_NAMES.indexOf(name.toLowerCase()) + 1;
+    if (isRealDate(Number(y), m, Number(d))) return true;
+  }
+  return false;
 }
 
 export function escapeHtml(text: string): string {
