@@ -165,6 +165,23 @@ test("--allow-short (tests only) cuts a short phrase with the same tail and loud
   assert.ok(existsSync(join(dir, "b", "window-7-8.wav")) && existsSync(join(dir, "b", "window-7-8.mp3")));
 });
 
+test("a window cut from a silent stem fails: exit 3, one line, the report written, no audio", () => {
+  // The stem's length and format, every sample zero.
+  const silent = spawnSync("ffmpeg", ["-v", "error", "-y", "-i", join(dir, "vocals.wav"), "-af", "volume=0", join(dir, "silent.wav")]);
+  assert.equal(silent.status, 0, String(silent.stderr));
+  const t0 = String(r4(truth.words[0].start - 0.024));
+  const result = film("window", dir, ["--vocals", "silent.wav", "--words", "words.json", "--song-t0", t0, "--duration", "5", "--from", "0", "--to", "6", "--name", "W09", "--out", "quiet"]);
+  assert.equal(result.status, 3, result.stdout + result.stderr);
+  assert.equal(result.stderr, "");
+  assert.deepEqual(lines(result.stdout), ["window: the kept phrases are silent (-inf dBFS RMS, want at least -60 dBFS)"]);
+  const report = JSON.parse(readFileSync(join(dir, "quiet", "window-report.json"), "utf8"));
+  assert.equal(report.ok, false);
+  assert.equal(report.rms_dbfs, null);
+  assert.deepEqual(report.outputs, { report: "window-report.json" });
+  assert.equal(existsSync(join(dir, "quiet", "W09.wav")), false);
+  assert.equal(existsSync(join(dir, "quiet", "W09.mp3")), false);
+});
+
 test("refusals: one line each on stdout, exit 2, nothing written", () => {
   writeFileSync(join(dir, "noise.wav"), "not audio");
   writeFileSync(join(dir, "bad.json"), "[1, 2]");

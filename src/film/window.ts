@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   EXIT,
+  Failed,
   Refused,
   Unexpected,
   fromCaller,
@@ -30,8 +31,9 @@ import type { RunResult } from "../render.ts";
 // 15 ms of the fade, at most 0.40 s, never past the next word's start less 0.05 s nor the
 // window's end); 15 ms raised-cosine ramps on every gate edge and silence elsewhere. The kept
 // part is normalised to -16 dBFS RMS and limited to -1 dBFS peaks, and written as <name>.wav
-// (16-bit, 44.1 kHz, mono) and <name>.mp3 (192 kbps). A duration under 4 s or over 8 s is
-// refused; --allow-short (for tests only) lifts the lower bound.
+// (16-bit, 44.1 kHz, mono) and <name>.mp3 (192 kbps). A kept part under -60 dBFS RMS before
+// normalising (a silent stem) fails, exit 3, the report written and no audio. A duration under
+// 4 s or over 8 s is refused; --allow-short (for tests only) lifts the lower bound.
 
 const COMMAND = "film:window";
 const RATE = 44100;
@@ -46,6 +48,8 @@ const TAIL_DB = 24;
 const RAMP = 0.015;
 const TARGET_DBFS = -16;
 const LIMIT_DBFS = -1.05; // a little under -1 dBFS, so 16-bit rounding never crosses it
+const SILENT_DBFS = -60; // a kept part quieter than this before normalising is silence
+const SILENT_RMS = 10 ** (SILENT_DBFS / 20);
 const MIN_S = 4;
 const MAX_S = 8;
 
@@ -131,7 +135,8 @@ function phrases(words: Word[], from: number, to: number, energy: Float64Array, 
 }
 
 // The window's samples: the gated phrases, normalised and limited.
-function render(samples: Float32Array, t0: number, length: number, gates: Phrase[]): { pcm: Int16Array; rms: number; peak: number } {
+// `source` is the kept part's RMS before normalising: the stem's own level there.
+function render(samples: Float32Array, t0: number, length: number, gates: Phrase[]): { pcm: Int16Array; rms: number; peak: number; source: number } {
   const n = Math.round(length * RATE);
   const start = Math.round(t0 * RATE);
   const x = new Float64Array(n);
@@ -161,7 +166,9 @@ function render(samples: Float32Array, t0: number, length: number, gates: Phrase
     return Math.sqrt(sum / Math.max(1, count));
   };
   const hold = Math.round(0.005 * RATE);
-  for (let round = 0; round < 40; round++) {
+  const source = rmsOf();
+  // A silent kept part is not normalised (film:window fails it before writing anything).
+  for (let round = 0; round < 40 && source >= SILENT_RMS; round++) {
     const rms = rmsOf();
     if (rms <= 0) break;
     const scale = target / rms;
@@ -200,7 +207,7 @@ function render(samples: Float32Array, t0: number, length: number, gates: Phrase
       count++;
     }
   }
-  return { pcm, rms: Math.sqrt(sum / Math.max(1, count)), peak };
+  return { pcm, rms: Math.sqrt(sum / Math.max(1, count)), peak, source };
 }
 
 function wav(pcm: Int16Array): Buffer {
@@ -295,7 +302,28 @@ async function main(): Promise<number> {
     const gates = phrases(words, from, to, energy, windowStart, windowEnd);
     const t0 = gates[0].t0;
     const t1 = gates.at(-1)!.t1;
-    const { pcm, rms, peak } = render(samples, songT0, duration, gates);
+    const { pcm, rms, peak, source } = render(samples, songT0, duration, gates);
+    const r = (v: number, d = 4) => Math.round(v * 10 ** d) / 10 ** d;
+    const inputs = { vocals, words: wordsFile, song_t0: songT0, duration, from: given ? from : null, to: given ? to : null, allow_short: allowShort };
+    if (source < SILENT_RMS) {
+      // A silent stem (or a silent stretch of it): normalising would only lift the noise floor,
+      // and a silent window would pass to the clip as if she sang. Checked and failed.
+      const level = source > 0 ? `${dbfs(source).toFixed(1)} dBFS` : "-inf dBFS";
+      writeReport(out, "window", {
+        ok: false,
+        inputs,
+        outputs: { report: "window-report.json" },
+        song_t0: songT0,
+        duration,
+        from,
+        to,
+        phrases: gates.map((g) => ({ t0: r(g.t0), t1: r(g.t1), words: [g.first, g.last] })),
+        words: words.slice(from, to + 1),
+        rms_dbfs: source > 0 ? r(dbfs(source), 2) : null,
+        silent_below_dbfs: SILENT_DBFS,
+      });
+      throw new Failed([`window: the kept phrases are silent (${level} RMS, want at least ${SILENT_DBFS} dBFS)`]);
+    }
     const wavBytes = wav(pcm);
     writeFileSync(join(temp, "window.wav"), wavBytes);
     const mp3 = join(temp, "window.mp3");
@@ -305,10 +333,9 @@ async function main(): Promise<number> {
 
     writeIn(out, `${name}.wav`, wavBytes);
     writeIn(out, `${name}.mp3`, mp3Bytes);
-    const r = (v: number, d = 4) => Math.round(v * 10 ** d) / 10 ** d;
     writeReport(out, "window", {
       ok: true,
-      inputs: { vocals, words: wordsFile, song_t0: songT0, duration, from: given ? from : null, to: given ? to : null, allow_short: allowShort },
+      inputs,
       outputs: { wav: `${name}.wav`, mp3: `${name}.mp3`, report: "window-report.json" },
       // The file is [song_t0, song_t0 + duration] of the song; the voice in it runs t0 to t1.
       song_t0: songT0,

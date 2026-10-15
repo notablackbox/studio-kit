@@ -365,7 +365,7 @@ and the exit codes it can end with (every one can also end with `1`):
 | `film:beats` | `beats.json`, `beats-report.json` | 0, 2 |
 | `film:words` | `words.json`, `words-report.json` | 0, 2, 3 |
 | `film:hits` | `hits.json`, `hits-report.json` | 0, 2 |
-| `film:window` | `<name>.wav`, `<name>.mp3`, `window-report.json` | 0, 2 |
+| `film:window` | `<name>.wav`, `<name>.mp3`, `window-report.json` | 0, 2, 3 |
 | `film:audit` | `audit-report.json` | 0, 2, 3 |
 | `film:sheet` | `sheet.pdf`, `sheet.html`, `sheet-report.json` | 0, 2 |
 | `film:depth` | `<plate>.depth.png`, `.near.png`, `.mid.png`, `.far.png`, `.boxes.json`, `depth-report.json` | 0, 2 |
@@ -578,8 +578,12 @@ lookahead limiter, then the level again, until both hold). It writes
 `<name>.wav` (16-bit, 44.1 kHz, mono) and `<name>.mp3` (192 kbps; `<name>`
 defaults to `window-<from>-<to>`) and `window-report.json` with `song_t0`,
 `duration`, `from`, `to`, the voice's `t0` and `t1` in song time, `tail`, the
-`phrases`, the `words`, `rms_dbfs` and `peak_dbfs`. A `--duration` under 4 s or
-over 8 s is refused. `--allow-short` lifts the 4 s floor; it exists for the
+`phrases`, the `words`, `rms_dbfs` and `peak_dbfs`. A kept part quieter than
+-60 dBFS RMS before normalising (a silent vocal stem, or a silent stretch of it)
+is checked and failed, exit 3, with no audio written and the report's `ok`
+false (`rms_dbfs` null for digital silence):
+`window: the kept phrases are silent (-inf dBFS RMS, want at least -60 dBFS)`.
+A `--duration` under 4 s or over 8 s is refused. `--allow-short` lifts the 4 s floor; it exists for the
 kit's tests (the test song's phrases are short) and a production run never
 passes it.
 
@@ -1459,7 +1463,8 @@ off, as in [Listening](#listening-filmstems-filmbeats-filmwords-filmhits-filmwin
 with `words.json` written too; `film:audit`, one `gate <name>: ...` line per
 failing gate; `film:edl`, one `edl: "s004" has neither a take nor a plate (clip "W09" has no delivered take)`
 (or `edl: "s002" has neither a take nor a plate (take "W01-t2" starts 0.200 s late (...))`) line
-per shot, and no `edl.json`; `film:sync`, `sync: "take-2.mp4" does not copy the window (NCC 0.04, want over 0.2)`;
+per shot, and no `edl.json`; `film:window`, `window: the kept phrases are silent (...)`
+and no audio; `film:sync`, `sync: "take-2.mp4" does not copy the window (NCC 0.04, want over 0.2)`;
 `film:gate`, `gate: 10/12` and a line per word not drawn; `film:history`, the differing pixel; `film:flash`,
 `flash: 4 flashes in one second between 0.042 and 2.000 s, want at most 3`; `film:mix`,
 `mix: -20.1 LUFS, the master -18.3 LUFS (-1.8 LU off, want within 1)`.
