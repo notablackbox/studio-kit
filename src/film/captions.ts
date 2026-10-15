@@ -11,6 +11,7 @@ import { lyricLines, parseTokens, plainText, readPalette } from "../remotion/fil
 // burned in by ffmpeg's subtitles filter in the text face (Inter), bottom left, in the brand's
 // warm white outlined in its black (palette.json). The cues are song time, so --video must be
 // the full master (or anything that starts at the song's first sample), not a chapter.
+// Word times must be finite seconds from 0, t1 no earlier than t0, or the cue is refused.
 
 const COMMAND = "film:captions";
 
@@ -47,6 +48,14 @@ async function main(): Promise<number> {
       const got = parseTokens(text).reduce((s, t) => s + t.count, 0);
       if (got !== want) problems.push(`--display line ${n} (${shown(text)}) shows ${got} sung words, words.json has ${want}`);
     });
+  // A cue's times come from its words: each must be finite seconds from 0, ending no earlier
+  // than it starts (1e309 parses as Infinity), or the cue is refused by its line.
+  words.forEach((w, i) => {
+    const cue = `cue ${w.line}${display[w.line] !== undefined ? ` (${shown(plainText(display[w.line]))})` : ""}: word ${i}`;
+    const bad = [["t0", w.t0], ["t1", w.t1]].filter(([, t]) => !Number.isFinite(t) || (t as number) < 0);
+    for (const [key, t] of bad) problems.push(`${cue} ${key} is ${t}, want finite seconds from 0`);
+    if (bad.length === 0 && w.t1 < w.t0) problems.push(`${cue} ends at ${w.t1}, before its start at ${w.t0}`);
+  });
   const video = values.video ? requireFile(fromCaller(values.video), "--video") : null;
   if (video && !(await probeVideo(video))) problems.push("--video cannot be read as a video");
   const brand = values.brand ? fromCaller(values.brand) : join(KIT_ROOT, "brand");

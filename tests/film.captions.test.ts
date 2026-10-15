@@ -60,3 +60,20 @@ test("refusals: missing flags, a display that does not fit words.json, a video t
   }
   assert.equal(existsSync(join(dir, "x")), false);
 });
+
+test("a cue's times must be finite seconds from 0, ending no earlier than they start", () => {
+  const data = JSON.parse(readFileSync(join(dir, "words.json"), "utf8"));
+  const [w4, w7] = [data.words[4], data.words[7]];
+  assert.deepEqual([w4.line, w7.line], [1, 2]);
+  // Word 4 ends before it starts; word 7 ends at 1e309, which JSON reads as Infinity.
+  w4.t1 = w4.t0 - 0.5;
+  w7.t1 = 7777;
+  writeFileSync(join(dir, "badtimes.json"), JSON.stringify(data).replace("7777", "1e309"));
+  const result = film("captions", dir, ["--words", "badtimes.json", "--display", "display.txt", "--out", "bad"]);
+  assert.equal(result.status, 2, result.stdout + result.stderr);
+  assert.deepEqual(lines(result.stdout), [
+    `cue 1 ("We count the windows."): word 4 ends at ${w4.t1}, before its start at ${w4.t0}`,
+    'cue 2 ("Hold on,"): word 7 t1 is Infinity, want finite seconds from 0',
+  ]);
+  assert.equal(existsSync(join(dir, "bad")), false);
+});

@@ -1138,7 +1138,10 @@ and counts stripped), from the line's first word's start to its last word's
 end, and with `--video` burns it in with ffmpeg's `subtitles` filter in Inter,
 the brand's warm white outlined in its black from `palette.json`
 (`captioned.mp4`). The cues are song time, so `--video` must be the full master
-(or anything that starts at the song's first sample), never a chapter.
+(or anything that starts at the song's first sample), never a chapter. Every
+word's `t0` and `t1` must be finite seconds from 0 (`1e309` reads as Infinity)
+and `t1` no earlier than `t0`; otherwise the cue is refused (exit 2) by its line
+and word, before any cue is built.
 
 The tests build a project from the board fixture's analysis: a ten-second
 chapter (a still plate, a sung shot on a fake take made with ffmpeg's
@@ -1584,7 +1587,9 @@ and `model depth is not in "/opt/models" (run ...)`.
 `film:captions`: `film:captions: --words, --display and --out are required`,
 `--words is not a words.json`, `--display has 1 lyric line, words.json has 4`,
 `--display line 1 (...) shows 5 sung words, words.json has 4`, `--video cannot be read as a video`,
-`--brand has no fonts folder`, `--brand has no palette.json with black and warmWhite`.
+`--brand has no fonts folder`, `--brand has no palette.json with black and warmWhite`,
+one line per bad word time: `cue 2 ("Hold on,"): word 7 t1 is Infinity, want finite seconds from 0`,
+`cue 1 ("We count the windows."): word 4 ends at 2.6, before its start at 3.1`.
 
 Exit `3`, with the report written: `film:words`, the check's line and the words
 off, as in [Listening](#listening-filmstems-filmbeats-filmwords-filmhits-filmwindow),
