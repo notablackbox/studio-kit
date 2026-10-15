@@ -219,6 +219,21 @@ test("refusals: one line each on stdout, exit 2, nothing written", () => {
   }
 });
 
+test("a window reaching past the stem's end is refused naming both; one ending on it passes", () => {
+  // From the gap before word 7 ("hold"), 6 s: past the end of the song's vocal stem.
+  const t0 = r4(truth.words[7].start - 0.05);
+  const stemEnd = readWav(join(dir, "vocals.wav")).mono.length / 44100;
+  assert.ok(t0 + 6 > stemEnd + 0.01, `the stem ends at ${stemEnd}`);
+  const result = film("window", dir, ["--vocals", "vocals.wav", "--words", "words.json", "--song-t0", String(t0), "--duration", "6", "--out", "past"]);
+  assert.equal(result.status, 2, result.stdout + result.stderr);
+  assert.deepEqual(lines(result.stdout), [`the window ends at ${(t0 + 6).toFixed(3)} s, past the end of --vocals at ${stemEnd.toFixed(3)} s`]);
+  assert.equal(existsSync(join(dir, "past")), false);
+  // Ending on the stem's last sample is inside it.
+  const exact = r4(stemEnd - t0);
+  const ok = film("window", dir, ["--vocals", "vocals.wav", "--words", "words.json", "--song-t0", String(t0), "--duration", String(exact), "--allow-short", "--out", "onend"]);
+  assert.equal(ok.status, 0, ok.stdout + ok.stderr);
+});
+
 test("anything unexpected is exit 1 with one line on stderr", () => {
   // No ffmpeg or ffprobe on the path.
   const t0 = String(r4(truth.words[0].start - 0.024));

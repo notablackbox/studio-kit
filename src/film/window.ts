@@ -34,7 +34,8 @@ import type { RunResult } from "../render.ts";
 // part is normalised to -16 dBFS RMS and limited to -1 dBFS peaks, and written as <name>.wav
 // (16-bit, 44.1 kHz, mono) and <name>.mp3 (192 kbps). A kept part under -60 dBFS RMS before
 // normalising (a silent stem) fails, exit 3, the report written and no audio. A duration under
-// 4 s or over 8 s is refused; --allow-short (for tests only) lifts the lower bound.
+// 4 s or over 8 s is refused; --allow-short (for tests only) lifts the lower bound. A window
+// reaching past the decoded stem's end (1 ms slack) is refused, never zero-filled.
 
 const COMMAND = "film:window";
 const RATE = 44100;
@@ -53,6 +54,7 @@ const SILENT_DBFS = -60; // a kept part quieter than this before normalising is 
 const SILENT_RMS = 10 ** (SILENT_DBFS / 20);
 const MIN_S = 4;
 const MAX_S = 8;
+const END_ROUNDING = 0.001; // a window may end this far past the stem's last sample
 
 type Word = { i: number; w: string; t0: number; t1: number };
 
@@ -298,6 +300,12 @@ async function main(): Promise<number> {
   const temp = mkdtempSync(join(tmpdir(), "studio-kit-window-"));
   try {
     const samples = await decode(vocals, temp);
+    // The window lies inside the stem: past its end there are no samples to cut (they would be
+    // silence made up), so it is refused, with a millisecond's slack for rounding.
+    const stemEnd = samples.length / RATE;
+    if (windowEnd > stemEnd + END_ROUNDING) {
+      throw new Refused([`the window ends at ${windowEnd.toFixed(3)} s, past the end of --vocals at ${stemEnd.toFixed(3)} s`]);
+    }
     const energy = frames10(samples);
     // A phrase never starts before the window, nor before the end of the word ahead.
     const windowStart = Math.max(songT0, from > 0 ? words[from - 1].t1 : 0);

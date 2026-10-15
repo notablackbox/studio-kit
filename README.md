@@ -578,7 +578,9 @@ them, the words that start inside `[song_t0 - 0.02, song_t0 + duration - 0.08)`.
 Refused (exit 2) with the word named: a window that starts or ends inside a
 word (`the window starts at 1.16 s inside word 0 "the" (1.00 to 1.31): start it in a word gap`),
 a word of `--from`/`--to` outside the window, and a window no word starts in.
-Words are merged into phrases across gaps of 0.35 s or less; each phrase is
+A window reaching past the decoded stem's end (more than 1 ms, for rounding) is
+refused too, naming both ends (`the window ends at 12.900 s, past the end of --vocals at 12.000 s`):
+the missing samples would otherwise be zero-filled silence. Words are merged into phrases across gaps of 0.35 s or less; each phrase is
 kept from 0.05 s before its first word (never before the window's start or the
 end of the word ahead) to its last word's end plus a release tail that follows
 the stem's 10 ms energy until it falls 24 dB under the phrase's peak (at least
@@ -1390,6 +1392,9 @@ they need (`htdemucs` for stems; `mms_fa` and `whisper_tiny` for words).
 - one line per phrase word outside the window:
   `word 0 "the" (1.00 to 1.31) is outside the window (2.63 to 6.63 s)`
 - `no word starts inside the window (10.60 to 15.60 s)`
+- `the window ends at 12.900 s, past the end of --vocals at 12.000 s`: the
+  window must lie inside the decoded stem (1 ms of slack for rounding); past
+  its end there is nothing to cut, and the missing samples would be made-up silence
 
 The board commands share these: `--X cannot be read` for a path flag that is
 not a readable file, `--board is not a JSON file`, one `--board: ...` line per
