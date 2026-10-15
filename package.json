@@ -23,6 +23,14 @@
     "film:request": "tsx src/film/request.ts",
     "film:ledger": "tsx src/film/ledger.ts",
     "film:sync": "tsx src/film/sync.ts",
+    "film:chapter": "tsx src/film/chapter.ts",
+    "film:gate": "tsx src/film/gate.ts",
+    "film:history": "tsx src/film/history.ts",
+    "film:flash": "tsx src/film/flash.ts",
+    "film:mix": "tsx src/film/mix.ts",
+    "film:encode": "tsx src/film/encode.ts",
+    "film:reframe": "tsx src/film/reframe.ts",
+    "film:captions": "tsx src/film/captions.ts",
     "test": "node --import tsx --test tests/*.test.ts"
   },
   "dependencies": {
