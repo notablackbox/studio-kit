@@ -182,23 +182,42 @@ export function auditBoard(board: Board, analysis: Analysis, options: Options): 
     const ids: string[] = [];
     const first = shots[0];
     const last = shots[shots.length - 1];
+    // Edges within the tolerance must also land on the same frame of the 24 fps grid (a shot
+    // plays frames frameAt(t0) up to frameAt(t1), as a chapter does): a frame between two edges
+    // is in neither shot (black), one on both sides in both. The chapter gate's wording.
+    const frames = (from: number, to: number) => (to - from === 1 ? `frame ${from}` : `frames ${from} to ${to - 1}`);
+    const be = (from: number, to: number) => (to - from === 1 ? "is" : "are");
     if (Math.abs(first.t0) > TILE_EPS) {
       problems.push(`the first shot ${q(first.id)} starts at ${num(first.t0)} s, not 0`);
+      ids.push(first.id);
+    } else if (frameAt(first.t0) !== 0) {
+      const start = frameAt(first.t0);
+      problems.push(`the first shot ${q(first.id)} starts at ${num(first.t0)} s (frame ${start}): ${frames(0, start)} ${be(0, start)} in no shot`);
       ids.push(first.id);
     }
     for (let k = 1; k < shots.length; k++) {
       const a = shots[k - 1];
       const b = shots[k];
+      const [end, start] = [frameAt(a.t1), frameAt(b.t0)];
+      const edges = `${q(a.id)} ends at ${num(a.t1)} s (frame ${end}) and ${q(b.id)} starts at ${num(b.t0)} s (frame ${start})`;
       if (a.t1 > b.t0 + TILE_EPS) {
         problems.push(`${q(a.id)} ends at ${num(a.t1)} s, after ${q(b.id)} starts at ${num(b.t0)} s`);
         ids.push(a.id, b.id);
       } else if (b.t0 > a.t1 + TILE_EPS) {
         problems.push(`a gap from ${num(a.t1)} to ${num(b.t0)} s after ${q(a.id)}`);
         ids.push(a.id, b.id);
+      } else if (start !== end) {
+        problems.push(`${edges}: ${start > end ? `${frames(end, start)} ${be(end, start)} in neither` : `${frames(start, end)} ${be(start, end)} in both`}`);
+        ids.push(a.id, b.id);
       }
     }
     if (Math.abs(last.t1 - song) > TILE_EPS) {
       problems.push(`the last shot ${q(last.id)} ends at ${num(last.t1)} s, the song at ${num(song)} s`);
+      ids.push(last.id);
+    } else if (frameAt(last.t1) !== frameAt(song)) {
+      const [end, close] = [frameAt(last.t1), frameAt(song)];
+      const edges = `the last shot ${q(last.id)} ends at ${num(last.t1)} s (frame ${end}), the song at ${num(song)} s (frame ${close})`;
+      problems.push(`${edges}: ${end < close ? `${frames(end, close)} ${be(end, close)} in no shot` : `${frames(close, end)} ${be(close, end)} past the song's end`}`);
       ids.push(last.id);
     }
     if (Math.abs(board.duration - song) > TILE_EPS) problems.push(`the board's duration is ${num(board.duration)} s, the song's ${num(song)} s`);

@@ -187,6 +187,38 @@ test("tile: a gap, a late start and a short end fail", () => {
   assert.equal(line, 'gate tile: the first shot "s001" starts at 0.007 s, not 0; the last shot "s005" ends at 11.859 s, the song at 12 s; the board\'s duration is 11.859 s, the song\'s 12 s');
 });
 
+test("tile: edges within the tolerance must land on the same frame of the 24 fps grid", () => {
+  // The s004/s005 boundary moved onto the frame edge 10.875 s (frame 261): s004 ends there,
+  // s005 starts 0.0008 s later (frame 262), within the 0.001 s tolerance, so frame 261 would be
+  // in neither shot, a black frame.
+  const black = changedBoard(dir, "tile3.json", (_b, shot) => {
+    shot("s004").t1 = 10.875;
+    shot("s005").t0 = 10.8758;
+  });
+  assert.equal(
+    failsOnly("tile", black, "tile3", ["s004", "s005"]),
+    'gate tile: "s004" ends at 10.875 s (frame 261) and "s005" starts at 10.876 s (frame 262): frame 261 is in neither',
+  );
+  // The other way round, frame 261 is in both.
+  const twice = changedBoard(dir, "tile4.json", (_b, shot) => {
+    shot("s004").t1 = 10.8758;
+    shot("s005").t0 = 10.875;
+  });
+  assert.equal(
+    failsOnly("tile", twice, "tile4", ["s004", "s005"]),
+    'gate tile: "s004" ends at 10.876 s (frame 262) and "s005" starts at 10.875 s (frame 261): frame 261 is in both',
+  );
+  // The first shot on frame 0 and the last on the song's end frame (12 s is frame 288).
+  const ends = changedBoard(dir, "tile5.json", (_b, shot) => {
+    shot("s001").t0 = 0.0008;
+    shot("s005").t1 = 12.0008;
+  });
+  assert.equal(
+    failsOnly("tile", ends, "tile5", ["s001", "s005"]),
+    'gate tile: the first shot "s001" starts at 0.001 s (frame 1): frame 0 is in no shot; the last shot "s005" ends at 12.001 s (frame 289), the song at 12 s (frame 288): frame 288 is past the song\'s end',
+  );
+});
+
 test("cuts: a cut off the beat fails; on a hit from hits.json or a declared hit it passes", () => {
   const off = changedBoard(dir, "cuts.json", (_b, shot) => {
     shot("s001").t1 = 0.9;
