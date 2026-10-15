@@ -142,7 +142,7 @@ async function main(): Promise<number> {
     const text = values[flag];
     if (text === undefined) return null;
     const rate = Number(text);
-    if (!/^\d+(\.\d+)?$/.test(text) || !(rate > 0)) throw new Refused([`--${flag} is ${shown(text)}, want dollars above 0`]);
+    if (!/^\d+(\.\d+)?$/.test(text) || !Number.isFinite(rate) || !(rate > 0)) throw new Refused([`--${flag} is ${shown(text)}, want dollars above 0`]);
     return rate;
   };
   const ratePerSecond = rateFlag("rate-per-second");
@@ -185,13 +185,23 @@ async function main(): Promise<number> {
   if (kind !== "image") {
     if (typeof spec.start !== "string" || spec.start === "") problems.push(`${shown(id)} has no start`);
     duration = Number(body.duration);
-    if (body.duration === undefined || !(duration > 0)) problems.push(`${shown(id)} has no body.duration`);
+    // A finite number of seconds: 1e309 in the JSON, or the string "Infinity", is not one.
+    if (body.duration === undefined) problems.push(`${shown(id)} has no body.duration`);
+    else if (!Number.isFinite(duration) || !(duration > 0)) {
+      const value = typeof body.duration === "number" ? String(body.duration) : shown(body.duration);
+      problems.push(`${shown(id)} body.duration is ${value}, want seconds above 0`);
+    }
   }
   if (kind === "sung") {
     const w = spec.window;
-    if (!isObject(w) || typeof w.t0 !== "number" || typeof w.t1 !== "number") problems.push(`${shown(id)} has no window`);
-    else windowSpan = [w.t0, w.t1];
+    if (!isObject(w) || !Number.isFinite(w.t0) || !Number.isFinite(w.t1)) problems.push(`${shown(id)} has no window`);
+    else windowSpan = [w.t0 as number, w.t1 as number];
     if (typeof spec.words !== "string" || spec.words.trim() === "") problems.push(`${shown(id)} has no words`);
+  }
+  // An image slot's refs, when present, is a list of artifact ids; anything else is not read as none.
+  if (kind === "image" && spec.refs !== undefined) {
+    if (!Array.isArray(spec.refs)) problems.push(`${shown(id)} refs is ${shown(spec.refs)}, want a list of artifact ids`);
+    else if (spec.refs.some((r: unknown) => typeof r !== "string" || !ARTIFACT.test(r))) problems.push(`${shown(id)} refs want artifact ids (letters, digits, . _ : -)`);
   }
   if (windowSpan) {
     const length = windowSpan[1] - windowSpan[0];
@@ -249,15 +259,13 @@ async function main(): Promise<number> {
   const aspect = typeof body.aspect_ratio === "string" ? body.aspect_ratio : "16:9";
   let requestBody: Record<string, unknown>;
   if (kind === "image") {
-    const refs: unknown[] = Array.isArray(spec.refs) ? spec.refs : [];
-    const badRef = refs.find((r) => typeof r !== "string" || !ARTIFACT.test(r));
-    if (badRef !== undefined) throw new Refused([`${shown(id)} refs want artifact ids (letters, digits, . _ : -)`]);
+    const refs: string[] = spec.refs ?? [];
     requestBody = {
       model: modelId,
       messages: [
         {
           role: "user",
-          content: [{ type: "text", text }, ...refs.map((r) => ({ type: "image_url", image_url: { url: placeholder(r as string) } }))],
+          content: [{ type: "text", text }, ...refs.map((r) => ({ type: "image_url", image_url: { url: placeholder(r) } }))],
         },
       ],
       modalities: ["image", "text"],

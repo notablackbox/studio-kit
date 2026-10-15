@@ -829,7 +829,9 @@ re-sings them); a double quote in the words (the kit quotes the lyric); output s
 aspect ratio such as `16:9`, the words `resolution`, `duration` or `aspect ratio`,
 `5 second clip`; a timeline's `0-1s:` is fine); over 110 words in a sung prompt;
 a clip without `body.prompt`, `body.duration`, `start`, or, when sung, `window`
-and `words`; a provider, or a model on a provider, without a known URL; a
+and `words`; a `body.duration`, window time or rate flag that is not a finite
+number above 0 (`1e309`, `"Infinity"`); an image slot whose `refs` is present
+and not a list of artifact ids; a provider, or a model on a provider, without a known URL; a
 resolution without a known rate. The summary line names the reference, kind,
 provider, attempt, length, estimate and the key's first twelve digits:
 `request: "W01" sung on openrouter, attempt 1, 5 s at 720p, estimate $1.16, key 3f9a0c1d2e4b`.
@@ -1436,14 +1438,19 @@ and `model depth is not in "/opt/models" (run ...)`.
 - `--clip is not a clip file`, `--clip: "W09.json" holds clip "W01"`, `"W01" kind is "dance", want sung or motion`,
   `--image is not an image slot file`, `--image: "P002.json" holds image slot "P001"`,
   `--image: "slot.json" has no id that names a file` (or `--clip`)
-- one line per problem in the clip: `"W01" has no body.prompt` (`start`, `window`, `words`, `body.duration`, `model`),
+- one line per problem in the clip: `"W01" has no body.prompt` (`start`, `window`, `words`, `body.duration`, `model`;
+  a window whose `t0` or `t1` is not a finite number, such as `1e309`, is no window),
+  `"W01" body.duration is Infinity, want seconds above 0` (a duration must be a finite number above 0:
+  `1e309` and `"Infinity"` are refused, as is a rate flag whose digits overflow),
   `"W01" window is 3.50 s (0.98 to 4.48), want 4 to 8 s`,
   `"W01" body.resolution is "4k", want 480p, 720p or 1080p`,
   `"W01" words have braces: the lyric goes in plain quotes` (or `prompt has braces`),
   `"W01" words have a double quote: the kit quotes the lyric`,
   `"W01" prompt has output settings ("720p", "16:9"): they go in the request, never the prompt`,
   `"W01" sung prompt is 120 words, want 110 or fewer`,
-  `"P001" refs want artifact ids (letters, digits, . _ : -)` (an image slot)
+  `"P001" refs want artifact ids (letters, digits, . _ : -)`,
+  `"P001" refs is "art-lead-front", want a list of artifact ids` (an image slot: `refs`, when present, is a list; a
+  string or `null` is refused, never read as no refs)
 - `"W01" was declined on openrouter: no request for it on any provider`
 - `--ledger line 3 is not a ledger row`
 

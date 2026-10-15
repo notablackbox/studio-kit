@@ -171,6 +171,23 @@ function variant(id: string, change: (clip: Record<string, any>) => void): strin
   writeFileSync(join(dir, "clips", `${id}.json`), JSON.stringify(clip));
   return `clips/${id}.json`;
 }
+// The same, changed as JSON text: for values JSON.stringify cannot write (1e309).
+function rawVariant(id: string, change: (text: string) => string): string {
+  const clip = readJson("clips", "W01.json");
+  clip.id = id;
+  const text = change(JSON.stringify(clip));
+  assert.notEqual(text, JSON.stringify(clip));
+  writeFileSync(join(dir, "clips", `${id}.json`), text);
+  return `clips/${id}.json`;
+}
+// An image slot P001 with a change, in its own folder (the file is named by its id).
+function slotVariant(folder: string, change: (slot: Record<string, any>) => void): string {
+  const slot = readJson("P001.json");
+  change(slot);
+  mkdirSync(join(dir, folder), { recursive: true });
+  writeFileSync(join(dir, folder, "P001.json"), JSON.stringify(slot));
+  return `${folder}/P001.json`;
+}
 
 test("the prompt rules and the clip's fields are refusals: one line each, exit 2, nothing written", () => {
   const long = Array.from({ length: 48 }, (_, i) => `beat${i}`).join(" ");
@@ -188,6 +205,11 @@ test("the prompt rules and the clip's fields are refusals: one line each, exit 2
     [["--clip", variant("X10", (c) => delete c.body.duration)], ['"X10" has no body.duration']],
     [["--clip", variant("X11", (c) => (c.words = ""))], ['"X11" has no words']],
     [["--clip", variant("X12", (c) => (c.kind = "dance"))], ['"X12" kind is "dance", want sung or motion']],
+    // A duration must be finite: 1e309 parses as Infinity, and so does the string "Infinity".
+    [["--clip", rawVariant("X14", (text) => text.replace('"duration":5', '"duration":1e309'))], ['"X14" body.duration is Infinity, want seconds above 0']],
+    [["--clip", variant("X15", (c) => (c.body.duration = "Infinity"))], ['"X15" body.duration is "Infinity", want seconds above 0']],
+    [["--clip", variant("X16", (c) => (c.body.duration = 0))], ['"X16" body.duration is 0, want seconds above 0']],
+    [["--clip", rawVariant("X17", (text) => text.replace(/"t1":[0-9.]+/, '"t1":1e309'))], ['"X17" has no window']],
   ];
   for (const [flags, want] of cases) {
     const result = film("request", dir, ["--provider", "openrouter", "--ledger", "ledger.jsonl", "--out", "x", "--start-artifact", "a1", "--window-artifact", "a2", ...flags]);
@@ -215,6 +237,13 @@ test("flag refusals: one line each, exit 2, nothing written", () => {
     [["--image", "P001.json", "--ledger", "ledger.jsonl", "--out", "x", "--provider", "openrouter", "--start-artifact", "a1"], "--image takes no --start-artifact or --window-artifact"],
     [[...sung, "--provider", "openrouter", ...arts, "--resolution", "4k"], '--resolution is "4k", want 480p, 720p or 1080p'],
     [[...sung, "--provider", "openrouter", ...arts, "--rate-per-second", "0"], '--rate-per-second is "0", want dollars above 0'],
+    // Digits enough to overflow to Infinity are not a rate.
+    [[...sung, "--provider", "openrouter", ...arts, "--rate-per-second", `1${"0".repeat(400)}`], `--rate-per-second is "1${"0".repeat(400)}", want dollars above 0`],
+    [["--image", "P001.json", "--ledger", "ledger.jsonl", "--out", "x", "--provider", "openrouter", "--rate-per-image", `9${"9".repeat(400)}.5`], `--rate-per-image is "9${"9".repeat(400)}.5", want dollars above 0`],
+    // An image slot's refs is a list of artifact ids: a string is not one, nor is null.
+    [["--image", slotVariant("refstr", (s) => (s.refs = "art-lead-front")), "--ledger", "ledger.jsonl", "--out", "x", "--provider", "openrouter"], '"P001" refs is "art-lead-front", want a list of artifact ids'],
+    [["--image", slotVariant("refnull", (s) => (s.refs = null)), "--ledger", "ledger.jsonl", "--out", "x", "--provider", "openrouter"], '"P001" refs is null, want a list of artifact ids'],
+    [["--image", slotVariant("refnum", (s) => (s.refs = ["art-a", 7])), "--ledger", "ledger.jsonl", "--out", "x", "--provider", "openrouter"], '"P001" refs want artifact ids (letters, digits, . _ : -)'],
     [[...sung, "--provider", "higgsfield", ...arts, "--resolution", "1080p"], "no rate for bytedance/seedance-2.5 on higgsfield at 1080p: give --rate-per-second"],
     [["--clip", "nope.json", "--ledger", "ledger.jsonl", "--out", "x", "--provider", "openrouter", ...arts], "--clip cannot be read"],
     [["--clip", "notjson.json", "--ledger", "ledger.jsonl", "--out", "x", "--provider", "openrouter", ...arts], "--clip is not a clip file"],
