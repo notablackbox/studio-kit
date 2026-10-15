@@ -1,11 +1,12 @@
-import { EXIT, Refused, fromCaller, isMain, outProblem, parseFlags, python, requireFile, run, writeIn, writeReport } from "./lib/cli.ts";
+import { EXIT, Failed, Refused, fromCaller, isMain, outProblem, parseFlags, python, requireFile, run, writeIn, writeReport } from "./lib/cli.ts";
 
 // film:beats: the beat map of a take, from its drum stem. Never one BPM: local tempos on 20 s
 // windows every 5 s (0.05 BPM and 4 ms phase steps), beats stepped along the tempo curve and
 // snapped to drum onsets within 30 ms, downbeats by a kick vote unless --downbeat-phase sets
 // them, sections from the lyric sheet's tags (lyrics-tag when timed by the words, else
 // heuristic; an empty or coinciding tag merged with a note). Writes beats.json (the formats
-// wiki's shape).
+// wiki's shape). A silent drum stem (its onset strength peaks under the floor) fails, exit 3:
+// the report is written and no beats.json, since any grid on silence would be arbitrary.
 
 const COMMAND = "film:beats";
 const TIMEOUT_MS = 10 * 60 * 1000;
@@ -20,7 +21,9 @@ type BeatMap = {
   downbeat_method: "kick" | "manual";
   sections: unknown[];
 };
-type Mapped = { beats_json: BeatMap; kick_votes: number[] | null; section_notes: string[]; windows: unknown[]; sample_rate: number };
+type Mapped =
+  | { silent?: undefined; beats_json: BeatMap; kick_votes: number[] | null; section_notes: string[]; windows: unknown[]; sample_rate: number }
+  | { silent: true; onset_peak: number; onset_floor: number; duration: number };
 
 function tempoRange(text: string | undefined): [number, number] {
   if (text === undefined) return DEFAULT_RANGE;
@@ -56,12 +59,24 @@ async function main(): Promise<number> {
 
   const spec = { drums, downbeat_phase: phase, tempo_range: range, lyrics, words };
   const mapped = await python<Mapped>("beats", [JSON.stringify(spec)], TIMEOUT_MS);
+  const inputs = { drums, lyrics, words, downbeat_phase: phase, tempo_range: range };
+  if (mapped.silent) {
+    writeReport(out, "beats", {
+      ok: false,
+      inputs,
+      outputs: { report: "beats-report.json" },
+      duration: mapped.duration,
+      onset_peak: mapped.onset_peak,
+      onset_floor: mapped.onset_floor,
+    });
+    throw new Failed(["beats: the drum stem is silent (no onsets)"]);
+  }
   const map = mapped.beats_json;
   writeIn(out, "beats.json", JSON.stringify(map, null, 2) + "\n");
   const bpms = map.tempo.map((t) => t.bpm);
   writeReport(out, "beats", {
     ok: true,
-    inputs: { drums, lyrics, words, downbeat_phase: phase, tempo_range: range },
+    inputs,
     outputs: { beats: "beats.json", report: "beats-report.json" },
     beats: map.beats.length,
     bars: map.downbeats.length,

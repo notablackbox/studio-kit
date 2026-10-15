@@ -8,7 +8,9 @@ runner never does): {"drums": path, "downbeat_phase": null | 0..3, "tempo_range"
 
 1. Onset strength: the spectral flux of the drum stem every 4 ms, on square-root magnitudes
    below 5 kHz, so the grid goes on the kick and the snare, never the hats (the song wiki:
-   "put the grid on the kick").
+   "put the grid on the kick"). A stem whose onset strength peaks under ONSET_FLOOR (before
+   normalising) is silent: the result is {"silent": true, ...} and no map, since any grid on it
+   would be arbitrary.
 2. Local tempo on 20 s windows every 5 s: every BPM in 0.05 steps inside the tempo range and
    every phase in 4 ms steps (a coarse pass, then the fine steps around the best three); a
    window's score is the mean onset strength on its beats. With five windows or more, the
@@ -41,10 +43,13 @@ STEP = 5.0
 SNAP = 0.03
 BPM_STEP = 0.05
 FLUX_TOP_HZ = 5000
+# The onset strength's peak (before normalising) under which the drum stem counts as silent: a
+# drum hit at -60 dBFS peaks near 2.5, 16-bit dither near 0.3, digital silence at 0.
+ONSET_FLOOR = 1.0
 
 
 def flux(x: np.ndarray, rate: int):
-    """Spectral flux every HOP seconds (frame rate returned), square-root magnitudes, normalised."""
+    """Spectral flux every HOP seconds, square-root magnitudes, normalised; and its peak before."""
     hop = HOP * rate
     size = 2048
     window = np.hanning(size)
@@ -65,11 +70,12 @@ def flux(x: np.ndarray, rate: int):
         previous = mag[-1:]
     out = out - np.convolve(out, np.ones(25) / 25, mode="same")  # less the local mean (100 ms)
     out = np.maximum(out, 0)
-    if out.max() > 0:
-        out /= out.max()
+    peak = float(out.max()) if len(out) else 0.0
+    if peak > 0:
+        out /= peak
     # A little smoothing, so a beat a few ms off its onset still scores.
     kernel = np.exp(-0.5 * (np.arange(-4, 5) / 2.0) ** 2)
-    return np.convolve(out, kernel / kernel.sum(), mode="same")
+    return np.convolve(out, kernel / kernel.sum(), mode="same"), peak
 
 
 def fit_window(strength: np.ndarray, t0: float, t1: float, low: float, high: float):
@@ -308,7 +314,13 @@ def main(argv) -> int:
         rate = audio.RATE
         drums = audio.read(job["drums"], rate)
         duration = len(drums) / rate
-        strength = flux(drums, rate)
+        strength, peak = flux(drums, rate)
+    if peak < ONSET_FLOOR:
+        # No onsets to put a grid on: any tempo would be arbitrary. Checked and failed.
+        done({"silent": True, "onset_peak": round(peak, 4), "onset_floor": ONSET_FLOOR, "duration": round(duration, 4)})
+        return 0
+
+    with quiet():
         fits, kept = tempo_curve(strength, duration, float(low), float(high))
         onset_times, _ = audio.onsets(drums, rate)
         beats = step_beats(kept, onset_times, duration)

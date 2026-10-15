@@ -144,6 +144,36 @@ test("two adjacent tags never make a zero-length section: the empty one is merge
   assert.deepEqual(report.section_notes, ["[Chorus] starts on the same downbeat as Pre: merged into Pre"]);
 });
 
+test("a silent drum stem fails: exit 3, one line, the report written and no beats.json", () => {
+  // Ten seconds of digital silence, 44.1 kHz 16-bit mono.
+  const rate = 44100;
+  const samples = rate * 10;
+  const wav = Buffer.alloc(44 + samples * 2);
+  wav.write("RIFF", 0, "ascii");
+  wav.writeUInt32LE(36 + samples * 2, 4);
+  wav.write("WAVEfmt ", 8, "ascii");
+  wav.writeUInt32LE(16, 16);
+  wav.writeUInt16LE(1, 20);
+  wav.writeUInt16LE(1, 22);
+  wav.writeUInt32LE(rate, 24);
+  wav.writeUInt32LE(rate * 2, 28);
+  wav.writeUInt16LE(2, 32);
+  wav.writeUInt16LE(16, 34);
+  wav.write("data", 36, "ascii");
+  wav.writeUInt32LE(samples * 2, 40);
+  writeFileSync(join(dir, "silent-drums.wav"), wav);
+  const out = join(dir, "silent");
+  const result = film("beats", dir, ["--drums", "silent-drums.wav", "--out", "silent"]);
+  assert.equal(result.status, 3, result.stdout + result.stderr);
+  assert.deepEqual(lines(result.stdout), ["beats: the drum stem is silent (no onsets)"]);
+  assert.deepEqual(readdirSync(out), ["beats-report.json"]);
+  const report = JSON.parse(readFileSync(join(out, "beats-report.json"), "utf8"));
+  assert.equal(report.ok, false);
+  assert.deepEqual(report.outputs, { report: "beats-report.json" });
+  assert.equal(report.onset_peak, 0);
+  assert.ok(report.onset_floor > 0);
+});
+
 test("refusals: one line each on stdout, exit 2, nothing written", () => {
   writeFileSync(join(dir, "noise.txt"), "not audio at all\n");
   writeFileSync(join(dir, "bad-words.json"), "{\"words\": 3}\n");
