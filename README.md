@@ -629,7 +629,7 @@ summary and the warnings. Any failing gate is exit 3, one line per gate:
 | `treatments` | a 2.5D (`plate3d`) shot without a treatment, or two 2.5D shots in a row with the same one |
 | `todo` | `TODO` or `TBD` (any case, whole words) or `???` anywhere in the board, except that in `type` text (a lyric may sing "todo") only capital `TODO`, `TBD` and `???` count; a shot with no framing or tier; a sung or motion shot with no clip; a 2.5D shot with no plate |
 | `genuine` | a `genuine` shot whose `footage` or `clip` is not a recorded shot of `--walk-report` (`shots[].file` with `status: recorded`) or an entry of `--recordings` (`recordings[].file`): footage by name or base name, a clip id by a file's stem; `deferred` with `--defer provenance` (the board step defers it, the build enforces it). A genuine shot naming no clip or footage fails even then |
-| `hook` | a `--hooks` entry (pipe-separated) that no shot types as a `masthead` or `mass` card with its whole text (any case, punctuation dropped, spaces folded); a hook written in parts with ` / ` also passes as a `stack` card whose lines (newlines or ` / `) are its parts in order |
+| `hook` | a `--hooks` entry (pipe-separated) that no shot types as a `masthead` or `mass` card with its whole text (any case, punctuation dropped, spaces folded); a hook written in parts with ` / ` also passes as a `stack` card whose lines (newlines or ` / `) are its parts in order. A card's text is what the chapter engine draws: an entry with empty `text` and a `line` counts as that line's display line |
 | `box` | two chapters in a row in the same `box` |
 
 It warns, without failing, when her share is over 85 percent, when two shots in

@@ -539,9 +539,12 @@ export function auditBoard(board: Board, analysis: Analysis, options: Options): 
     const problems: string[] = [];
     // A hook is full-frame when one masthead or mass card has its whole text; a hook written
     // with " / " also matches a stack card whose lines (newlines or " / ") are its parts in order.
-    const cards = new Set(shots.flatMap((s) => s.type.filter((t) => t.mode === "masthead" || t.mode === "mass").map((t) => bare(t.text))));
+    // A card's text is what the chapter engine draws: an entry with empty text and a line draws
+    // that line's display line (buildPlan's fallback).
+    const drawn = (t: Shot["type"][number]) => (t.line !== null && t.text.trim() === "" ? (analysis.display[t.line] ?? "") : t.text);
+    const cards = new Set(shots.flatMap((s) => s.type.filter((t) => t.mode === "masthead" || t.mode === "mass").map((t) => bare(drawn(t)))));
     const stacks = new Set(
-      shots.flatMap((s) => s.type.filter((t) => t.mode === "stack").map((t) => t.text.split(/\n|\s\/\s/).map(bare).filter((l) => l !== "").join("\n"))),
+      shots.flatMap((s) => s.type.filter((t) => t.mode === "stack").map((t) => drawn(t).split(/\n|\s\/\s/).map(bare).filter((l) => l !== "").join("\n"))),
     );
     for (const hook of options.hooks) {
       const parts = hook.split(/\s\/\s/).map(bare).filter((l) => l !== "");

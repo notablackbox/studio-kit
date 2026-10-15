@@ -446,6 +446,14 @@ test("hook: each --hooks entry must be a masthead or mass card somewhere", () =>
   assert.equal(audit(stacked, "hook3", ["--hooks", "not a cat / not in a box|VELOCITY IS THE MOAT"], flags).status, 0);
   const wrongOrder = failsOnly("hook", stacked, "hook4", [], ["--hooks", "NOT IN A BOX / NOT A CAT"], flags);
   assert.equal(wrongOrder, 'gate hook: "NOT IN A BOX / NOT A CAT" is on no masthead or mass card and no stack of its parts');
+  // A masthead with empty text draws its line's display line ("hold the light."), as the
+  // chapter engine fills it: the hook is on it.
+  const fromDisplay = changedBoard(dir, "hook5.json", (_b, shot) => {
+    (shot("s004").type as Record<string, unknown>[])[1].text = "";
+  });
+  const passed = audit(fromDisplay, "hook5", ["--hooks", "Hold the light"], flags);
+  assert.equal(passed.status, 0, passed.stdout);
+  assert.equal(gate(report("hook5"), "hook").status, "pass");
 });
 
 test("box: two chapters in a row in the same box fail", () => {
