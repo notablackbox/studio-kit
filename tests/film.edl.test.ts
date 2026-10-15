@@ -152,33 +152,69 @@ test("a delivered take with no file is no take; a take out of sync from its star
   ]);
 });
 
-test("a take that would play from before its first frame (a negative in) fails: exit 3 naming the shot, the report says why", () => {
-  // W01's window starts at 1.4, after the shot's start (0.976): in = 0.976 - 1.4 + 0.31 < 0.
-  // The chapter engine would freeze the take's first frame for the difference.
-  const clips = clipsCopy("clips-late", (folder) => {
+test("a take that starts late (a negative in) plays from its first frame after a head from the plate; one frame or less snaps; no plate fails", () => {
+  // W01's song_t0 is the shot's start (0.976); sync measured the take 0.2 s late: in = 0 - 0.2 < 0.
+  // The chapter engine would freeze the take's first frame for the difference, so the plate
+  // fills the head and the take plays from frame 0 when it falls due (1.176); the cover is unchanged.
+  const late = clipsCopy("clips-late", (folder) => {
     const w01 = JSON.parse(readFileSync(join(folder, "W01.json"), "utf8"));
-    w01.song_t0 = 1.4;
+    w01.takes[1].sync.lag_s = -0.2;
     writeFileSync(join(folder, "W01.json"), JSON.stringify(w01));
   });
-  const result = film("edl", dir, ARGS("shots.json", clips, "late"));
-  assert.equal(result.status, 3, result.stdout + result.stderr);
-  const why = 'take "W01-t2" would play from -0.114 s (in = 0.976 - song_t0 1.400 + lag 0.310), before its first frame';
-  assert.deepEqual(lines(result.stdout), [`edl: "s002" ${why}`]);
-  const r = report("late");
-  assert.equal(r.ok, false);
-  assert.deepEqual(r.missing, ["s002"]);
-  assert.deepEqual(r.failures, [{ shot: "s002", why }]);
-  assert.equal(existsSync(join(dir, "late", "edl.json")), false);
+  const result = film("edl", dir, ARGS("shots.json", late, "late"));
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.deepEqual(lines(result.stdout), [
+    "edl: 5 shots, 2 from takes (4 segments), 2 from plates, 1 from footage, 0 design, 1 fallback",
+    'fallback: "s002" plays plate "p-street" from 0.976 s: clip "W01" starts late (its take plays from its first frame when it falls due)',
+  ]);
+  assert.deepEqual(read("late").s002, {
+    segs: [
+      { t0: 0.976, plate: "p-street" },
+      { t0: 1.176, clip: "W01-t2", in: 0 },
+      { t0: 3.987, clip: "W01-c1-t1", in: 0.217 },
+    ],
+  });
+  assert.deepEqual(report("late").fallbacks, [{ shot: "s002", clip: "W01", at: 0.976, fallback: "late start", plate: "p-street" }]);
 
-  // A cover whose window starts after the cut: the cover's segment fails the same way.
+  // One frame or less late (a lag one sync hop off): the take plays from its first frame, no fallback.
+  const hop = clipsCopy("clips-hop", (folder) => {
+    const w01 = JSON.parse(readFileSync(join(folder, "W01.json"), "utf8"));
+    w01.takes[1].sync.lag_s = -0.03;
+    writeFileSync(join(folder, "W01.json"), JSON.stringify(w01));
+  });
+  const snapped = film("edl", dir, ARGS("shots.json", hop, "hop"));
+  assert.equal(snapped.status, 0, snapped.stdout + snapped.stderr);
+  assert.deepEqual(lines(snapped.stdout), ["edl: 5 shots, 2 from takes (3 segments), 2 from plates, 1 from footage, 0 design, 0 fallbacks"]);
+  assert.deepEqual(read("hop").s002.segs[0], { t0: 0.976, clip: "W01-t2", in: 0 });
+
+  // A cover whose window starts after the cut: the cover's segment gets the same head from the plate.
   const covers = clipsCopy("clips-late-cover", (folder) => {
     const c1 = JSON.parse(readFileSync(join(folder, "W01-c1.json"), "utf8"));
-    c1.song_t0 = 4.2;
+    c1.song_t0 = 4.5;
     writeFileSync(join(folder, "W01-c1.json"), JSON.stringify(c1));
   });
   const cover = film("edl", dir, ARGS("shots.json", covers, "latecover"));
-  assert.equal(cover.status, 3, cover.stdout + cover.stderr);
-  assert.match(lines(cover.stdout)[0], /^edl: "s002" take "W01-c1-t1" would play from -0\.\d+ s \(in = 3\.987 - song_t0 4\.200 \+ lag 0\.\d+\), before its first frame$/);
+  assert.equal(cover.status, 0, cover.stdout + cover.stderr);
+  assert.equal(lines(cover.stdout)[1], 'fallback: "s002" plays plate "p-street" from 3.987 s: clip "W01-c1" starts late (its take plays from its first frame when it falls due)');
+  const segs = read("latecover").s002.segs;
+  assert.deepEqual(segs[1], { t0: 3.987, plate: "p-street" });
+  assert.equal(segs[2].clip, "W01-c1-t1");
+  assert.equal(segs[2].in, 0);
+  assert.equal(segs[2].t0, 4.3, JSON.stringify(segs));
+
+  // No plate to fill the head from: the shot fails, exit 3, the report says why.
+  const board = changedBoard(dir, "late-noplate.json", (_b, shot) => {
+    shot("s002").plate = null;
+  });
+  const failed = film("edl", dir, ARGS(board, late, "late-noplate"));
+  assert.equal(failed.status, 3, failed.stdout + failed.stderr);
+  const why = 'take "W01-t2" starts 0.200 s late (in = 0.976 - song_t0 0.976 + lag -0.200)';
+  assert.deepEqual(lines(failed.stdout), [`edl: "s002" has neither a take nor a plate (${why})`]);
+  const r = report("late-noplate");
+  assert.equal(r.ok, false);
+  assert.deepEqual(r.missing, ["s002"]);
+  assert.deepEqual(r.failures, [{ shot: "s002", why: `has neither a take nor a plate (${why})` }]);
+  assert.equal(existsSync(join(dir, "late-noplate", "edl.json")), false);
 });
 
 test("refusals: one line each on stdout, exit 2, nothing written", () => {

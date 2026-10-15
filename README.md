@@ -557,7 +557,9 @@ shot's start and `--duration` the clip's length, both in song time: the stem is
 cut at `[song_t0, song_t0 + duration]`, so the file's first sample is song time
 `song_t0` and the file is exactly `duration` long. That `song_t0` is the clip
 file's `song_t0`: `film:edl` plays the take from `in = t0 - song_t0 + lag_s`,
-and `film:sync --song-t0` takes the same value. A shot cut on a beat in the
+and `film:sync --song-t0` takes the same value; the clip file's `window` is
+the file's span, `{t0: song_t0, t1: song_t0 + duration}`, not the voice's
+`t0`/`t1` the report gives. A shot cut on a beat in the
 silence before the singer keeps its silence; the window is never moved to the
 voice. The phrase's words are `--from` to `--to` (both or neither), or, without
 them, the words that start inside `[song_t0 - 0.02, song_t0 + duration - 0.08)`.
@@ -667,11 +669,13 @@ shot's start: `{segs: [{t0, clip: "<clip>-t<n>", in}]}` with
 `clip` holds the take id (`W01-t2`), not the clip id wiki/formats gives: a
 deliberate departure, so the chapter engine finds the take's file
 (`<clips>/W01/take-2.mp4`) from the edit list alone, and a re-rolled take
-changes the edit list. A negative `in` (the take would play from before its
-first frame, so the chapter engine would freeze frame 0 for the difference: the
-clip's `song_t0` is later than the shot's start, the window not cut from it)
-fails, exit 3:
-`edl: "s002" take "W01-t2" would play from -0.114 s (in = 0.976 - song_t0 1.400 + lag 0.310), before its first frame`. A sung take
+changes the edit list. A take that starts late (a negative `in`: the take would
+play from before its first frame, so the chapter engine would freeze frame 0
+for the difference; sync measured a negative lag, or the clip's `song_t0` is
+later than the shot's start) plays its plate until its first frame falls due,
+then the take from `in: 0`: `{segs: [{t0: 0.976, plate}, {t0: 1.176, clip, in: 0}, ...]}`,
+noted as a `late start` fallback. A late start of one frame or less (a lag one
+sync hop off) snaps to the take's first frame with no note. A sung take
 whose shot runs past its `sync.synced` spans is cut at its `sync.cut_at` to its
 first cover, which plays from there by its own `song_t0` and lag, down the
 chain. A `genuine` shot with `footage` is `{footage: "<file>"}` (the file the
@@ -684,10 +688,12 @@ is filled from the shot's plate and noted in the report (`fallbacks`, and a
 `fallback: ...` line on stdout): a clip or cover with no delivered take, a
 delivered take with no `file`, or no clip file is `no take`; a sung take that
 diverges with no cover is `no cover`; a take whose `cut_at` is at or before its
-segment's start is `out of sync`; a clip with nothing usable makes the whole
-shot `{plate}`. A sung or motion shot left with neither a take nor a plate
-fails: exit 3, one line each, the report written (`failures`: each shot and
-why) and no `edl.json`. The summary
+segment's start is `out of sync`; a take that starts more than a frame late is
+`late start` (the plate plays the head); a clip with nothing usable makes the
+whole shot `{plate}`. A sung or motion shot left with neither a take nor a
+plate (none delivered, or a late start with no plate to fill the head) fails:
+exit 3, one line each, the report written (`failures`: each shot and why) and
+no `edl.json`. The summary
 line counts the shots from takes, plates, footage and design. The report also gives, per sung shot, its sung
 seconds (each word of `--words` padded 30 ms, merged under 0.12 s) and how many
 of them the in-sync spans cover. A clip file that does not parse, or whose `id`
@@ -1142,7 +1148,8 @@ Found in review and left for a later release, one line each:
 - `{footage}` in the edit list plays from the file's first frame; there is no in point.
 - `film:sync` decides copy or diverged on the whole take's NCC, so a take at 0.157 that holds 99 percent of its sung seconds exits 3; read the synced spans too.
 - OpenRouter's `unsigned_urls[0]` download field is as documented, not yet seen live; re-read at spend.
-- A take that starts late (negative lag, missing head) is not counted as a divergence.
+- A take that starts late (negative lag, missing head) is not counted as a divergence by `film:sync`; `film:edl` fills the head from the plate.
+- `film:request` does not check the clip's `window` or `--duration` against `body.duration`.
 - The request meta file repeats the key and the estimate of the request.
 - The chapter plan is built twice, in Node and in the browser, from the same inputs.
 - Burned-in captions are not measured for BT.709 tags, and the burn font's provenance is not checked by a test.
@@ -1449,7 +1456,7 @@ Exit `3`, with the report written: `film:words`, the check's line and the words
 off, as in [Listening](#listening-filmstems-filmbeats-filmwords-filmhits-filmwindow),
 with `words.json` written too; `film:audit`, one `gate <name>: ...` line per
 failing gate; `film:edl`, one `edl: "s004" has neither a take nor a plate (clip "W09" has no delivered take)`
-(or `edl: "s002" take "W01-t2" would play from -0.114 s (...), before its first frame`) line
+(or `edl: "s002" has neither a take nor a plate (take "W01-t2" starts 0.200 s late (...))`) line
 per shot, and no `edl.json`; `film:sync`, `sync: "take-2.mp4" does not copy the window (NCC 0.04, want over 0.2)`;
 `film:gate`, `gate: 10/12` and a line per word not drawn; `film:history`, the differing pixel; `film:flash`,
 `flash: 4 flashes in one second between 0.042 and 2.000 s, want at most 3`; `film:mix`,

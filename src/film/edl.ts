@@ -14,9 +14,11 @@ import { KEY, readBoard, type Shot } from "./lib/board.ts";
 //   shot's plate, with a note in the report;
 // - a genuine shot with footage is `{footage}`, played like a clip;
 // - a still or 2.5D shot is its plate, or `{design: true}` (pure motion design) with none.
-// A sung or motion shot with neither a take nor a plate fails (exit 3), and so does a segment
-// whose `in` is negative (the take would have to play from before its first frame: its clip's
-// song_t0 is not where the window was cut). The report's `failures` say why. It also gives, per sung shot,
+// A take that starts late (a negative `in`: the take would have to play from before its first
+// frame, because sync measured a negative lag or the window was cut after the shot's start) plays
+// from its first frame after a head filled from the plate, noted as a `late start` fallback; a late
+// start of one frame or less is snapped to the take's first frame. A sung or motion shot with
+// neither a take nor a plate fails (exit 3). The report's `failures` say why. It also gives, per sung shot,
 // how much of its sung time (from --words) the in-sync spans cover.
 
 const COMMAND = "film:edl";
@@ -24,13 +26,14 @@ const EPS = 1e-6;
 const WORD_PAD = 0.03; // a sung stretch is each word +/- 30 ms ...
 const WORD_MERGE = 0.12; // ... merged when closer than this
 const SPAN_LEAD = 0.06; // an in-sync span's start, extended back
+const HEAD_SNAP = 1 / 24; // a late start of one frame or less plays from the take's first frame
 
 type Sync = { lag_s: number; synced: [number, number][]; cut_at: number | null };
 type Take = { n: number; status: string; file: string | null; sync: Sync | null };
 type Clip = { id: string; song_t0: number; takes: Take[]; covers: string[] };
 type Seg = { t0: number; clip: string; in: number } | { t0: number; plate: string };
 type Entry = { segs: Seg[] } | { plate: string } | { footage: string } | { design: true };
-type Fallback = { shot: string; clip: string; at: number; fallback: "no take" | "no cover" | "out of sync"; plate: string };
+type Fallback = { shot: string; clip: string; at: number; fallback: "no take" | "no cover" | "out of sync" | "late start"; plate: string };
 
 const r4 = (x: number) => Math.round(x * 10000) / 10000;
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -138,14 +141,23 @@ function resolve(shot: Shot, clips: Map<string, Clip | null>): Resolved {
     // Cut at or before its own start: nothing of the take is in sync here.
     if (cut !== null && cut <= t + EPS) return hole(clip.id, t, "out of sync", `clip ${shown(clip.id)} is out of sync from ${t.toFixed(3)} s`);
     const lag = sync?.lag_s ?? 0;
-    const at = r4(t - clip.song_t0 + lag);
-    // Before the take's first frame: the chapter engine would freeze frame 0 for the difference.
-    // The window was cut from somewhere after the shot's start (its song_t0 is not the shot's).
+    let at = r4(t - clip.song_t0 + lag);
+    let from = t;
+    // Before the take's first frame (a negative lag, or a window cut after the shot's start): the
+    // chapter engine would freeze frame 0 for the difference. One frame or less snaps to the first
+    // frame; more plays the plate until the take's first frame falls due, or fails without a plate.
+    if (at < 0 && -at <= HEAD_SNAP + EPS) at = 0;
     if (at < 0) {
-      const why = `take ${shown(`${clip.id}-t${take.n}`)} would play from ${at.toFixed(3)} s (in = ${t.toFixed(3)} - song_t0 ${clip.song_t0.toFixed(3)} + lag ${lag.toFixed(3)}), before its first frame`;
-      return { entry: null, fallbacks, why, spans, fail: `edl: ${shown(shot.id)} ${why}` };
+      const late = -at;
+      const why = `take ${shown(`${clip.id}-t${take.n}`)} starts ${late.toFixed(3)} s late (in = ${t.toFixed(3)} - song_t0 ${clip.song_t0.toFixed(3)} + lag ${lag.toFixed(3)})`;
+      if (!shot.plate) return { entry: null, fallbacks, why, spans };
+      fallbacks.push({ shot: shot.id, clip: clip.id, at: r4(t), fallback: "late start", plate: shot.plate });
+      segs.push({ t0: r4(t), plate: shot.plate });
+      from = r4(t + late);
+      at = 0;
+      if (from >= shot.t1 - EPS) break;
     }
-    segs.push({ t0: r4(t), clip: `${clip.id}-t${take.n}`, in: at });
+    segs.push({ t0: r4(from), clip: `${clip.id}-t${take.n}`, in: at });
     const end = cut !== null && cut < shot.t1 - EPS ? cut : shot.t1;
     if (sync) for (const [a, b] of sync.synced) spans.push([Math.max(a - SPAN_LEAD, t), Math.min(b, end)]);
     if (end >= shot.t1 - EPS) break;
@@ -257,7 +269,14 @@ async function main(): Promise<number> {
     `edl: ${board.shots.length} shots, ${fromTakes.length} from takes (${segments} segments), ${count("plate")} from plates, ${count("footage")} from footage, ${count("design")} design, ${fallbacks.length} fallback${fallbacks.length === 1 ? "" : "s"}`,
   );
   for (const f of fallbacks) {
-    const why = f.fallback === "no take" ? "has no delivered take" : f.fallback === "out of sync" ? "is out of sync from its start" : "diverges and has no cover";
+    const why =
+      f.fallback === "no take"
+        ? "has no delivered take"
+        : f.fallback === "out of sync"
+          ? "is out of sync from its start"
+          : f.fallback === "late start"
+            ? "starts late (its take plays from its first frame when it falls due)"
+            : "diverges and has no cover";
     console.log(`fallback: ${shown(f.shot)} plays plate ${shown(f.plate)} from ${f.at.toFixed(3)} s: clip ${shown(f.clip)} ${why}`);
   }
   return EXIT.done;
