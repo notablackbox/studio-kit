@@ -58,6 +58,11 @@ npm --prefix /opt/studio run render -- --script <path> --clips <dir> --out <dir>
 npm --prefix /opt/studio run changelog -- --in <file.md> --out <file.html>
 npm --prefix /opt/studio run film:status -- --status <status.json> [--set field=value ...] [--out <dir>]
 npm --prefix /opt/studio run film:score -- --lyrics <lyrics.txt> --out <dir>
+npm --prefix /opt/studio run film:stems -- --in <song.wav> --out <dir>
+npm --prefix /opt/studio run film:beats -- --drums <drums.wav> --out <dir> [--lyrics <lyrics.txt> [--words <words.json>]] [--downbeat-phase N] [--tempo-range low,high]
+npm --prefix /opt/studio run film:words -- --vocals <vocals.wav> --lyrics <lyrics.txt> --out <dir> [--display <display.txt>] [--expect <words.json>] [--min-conf X]
+npm --prefix /opt/studio run film:hits -- --stems <dir> --mix <song.wav> --out <dir> [--beats <beats.json>]
+npm --prefix /opt/studio run film:window -- --vocals <vocals.wav> --words <words.json> --from N --to N --out <dir> [--name <id>]
 ```
 
 ## `changelog`
@@ -391,6 +396,109 @@ out`), an all-caps acronym (`line 10: all-caps "AGI": spell an acronym out ("A G
 I")`), and a sheet over about 3,000 characters. Lint never changes the exit
 code.
 
+### Listening: `film:stems`, `film:beats`, `film:words`, `film:hits`, `film:window`
+
+The analysis of a take, after the toolkit wiki's items 4 to 8 and 14. The files
+they write have the formats wiki's shapes (`words.json`, `beats.json`,
+`hits.json`); times are seconds of song time. Measured on the test song in the
+kit's container (4 CPUs): stems 9 to 11 s, words 6 to 8 s, beats, hits and
+window 1 to 2 s each.
+
+`film:stems --in <song.wav> --out <dir>`: demucs `htdemucs` on the CPU, all four
+sources, never two-stem mode. Writes `<dir>/stems/vocals.wav`, `drums.wav`,
+`bass.wav` and `other.wav` (16-bit, 44.1 kHz, the input's channels), each moved
+in from the temp folder only once all four exist. `stems-report.json` records
+the model, the seconds taken and any samples clipped. The vocal stem feeds
+`film:words` and `film:window`, the drum stem `film:beats` and `film:hits`, bass
+and other the impacts and risers.
+
+`film:beats --drums <drums.wav> --out <dir>`: the beat map, never one BPM. The
+spectral flux of the drum stem below 5 kHz every 4 ms (the grid goes on the kick
+and snare, not the hats); a local tempo per 20 s window every 5 s, in BPM steps
+of 0.05 and phase steps of 4 ms, inside `--tempo-range` (default `70,180`; pin it
+when the map locks onto half or double time); with five windows or more the
+weakest fifth is dropped and the curve smoothed. Beats are stepped along the
+curve from the strongest window and each is snapped to a drum onset within
+30 ms. Downbeats by the kick vote: per block of 32 beats, the phase with the
+most 30 to 150 Hz onset energy; a block whose two best phases are within
+10 percent abstains (a kick on 1 and 3 ties), and when all abstain the song's
+first kick decides (`downbeat_method: "kick"`). `--downbeat-phase N` (0 to 3, the
+index in `beats` of the first downbeat) sets them by hand (`"manual"`).
+`tempo` is `[{t, bpm}]`, one per window. Sections: with `--lyrics`, one per
+`[tag]` of the sheet (`source: "lyrics-tag"`): with `--words` too, each starts
+on the downbeat its first word belongs to (a word under 0.8 s before a downbeat
+is its pickup), else the bars are shared evenly in the tags' order. Without a
+sheet, one section (`"heuristic"`). Each section has `t0`, `t1`, `bar0`, `bar1`
+and an `energy` (the drums' RMS against the loudest second, 0 to 1).
+
+`film:words --vocals <vocals.wav> --lyrics <lyrics.txt> --out <dir>`: a time for
+every sung word. The sheet's words (tag and blank lines skipped, the lyric
+files' one parser) are romanised to the MMS_FA dictionary (a to z and the
+apostrophe, accents dropped, digits spelled out) and force-aligned on the vocal
+stem at 16 kHz with torchaudio's wav2vec2 `MMS_FA` (30 s chunks with 2 s of
+context). Each word's edges are then moved to the stem's energy: out from its
+loudest frame through frames at 5 percent of that peak, bridging closures under
+80 ms, never into the next word, at most 0.25 s from where the aligner put it
+(the aligner lets a last consonant run on into silence). A word whose `conf` is
+under `--min-conf` (default 0.5) falls back, as the wiki merges them: to
+faster-whisper `tiny`'s word with the same text heard between its placed
+neighbours (`src: "whisper"`, its edges refined the same way), else to an even
+share of the gap between two placed words of its line (`"interp"`), else it
+keeps the aligner's time. `words.json` holds `words` (`i`, `w`, `line`, `t0`,
+`t1`, `conf`, `src`), `lines` (`line`, `text`, `t0`, `t1`) and `gaps` (2 s or
+more between words, and before the first or after the last, with `after_word`).
+The check: with `--expect` (a `words.json`, or the test song's `truth.json`), at
+least 90 percent of the words must start and end within 0.10 s of the expected
+times; without it, at least 90 percent must have a `conf` of `--min-conf` or more.
+Otherwise exit `3`, `words.json` and the report still written, and one line per
+failure: `words: 8 of 12 within 0.10 s of the expected times, want at least 90 percent`
+(or `words: 5 of 12 with confidence 0.5 or more, want at least 90 percent`),
+then `word 3 "we": starts +0.13 s, ends +0.00 s off` for each word off (up to 20).
+The ear check, in `words-report.json` (`ear_check`, at most five spots, most
+urgent first; `flags` holds them all) and printed as `ear check: ...` lines:
+`letters` (a lyric line with no letters, or an all-caps token sung letter by
+letter), `order` (a word starting over 0.05 s before the one ahead), `gap` (over
+1 s between two words of a line), `verylow` (`conf` under 0.1), `length` (a word
+over 1.2 s, or over three times its line's median), `lowconf` (`conf` under 0.3,
+or a time from the fallback). With `--display`, each display line must consume
+exactly its lyric line's words (`TEXT|n` shows TEXT over n words, n defaults to
+1, `|0` rides on the next token), else it is refused before any work.
+
+`film:hits --stems <dir> --mix <song.wav> --out <dir>`: `kick` (drum-stem onsets
+at 30 to 150 Hz), `snare` (150 Hz to 5 kHz) and `hat` (6 to 16 kHz), a snare or
+hat onset within 45 ms of a kick dropped as the kick's click. An onset is timed
+where the band's envelope crosses a quarter of its rise. `hits`: the impact
+score per 10 ms, the jump of the next 0.6 s over the previous 1.5 s of each
+envelope as `max(mix, 0.9 drums, 0.7 bass)`, its peaks at 0.22 or more snapped
+to the nearest drum onset within 0.65 s and merged within 2 s. `risers`: the
+bass and other stems (else the mix less the drums) rising, small dips allowed,
+by 6 dB or more over at least two beats (1 s without a beat map), landing on a
+hit. `fills` (with `--beats <beats.json>`; empty without): the beat before each
+hit, and the last half of any bar holding more drum onsets than the bars' usual
+last half. `vocal_entries`: where the vocal stem rises over 40 dB under its peak
+after at least 0.25 s under it. `env24`: the drums', vocals' and bass' RMS per
+frame at 24 fps, scaled 0 to 1 (all zeros without a bass stem). The folder needs
+`drums.wav` and `vocals.wav`; `bass.wav` and `other.wav` are used when there;
+the report lists which (`used`, `absent`).
+
+`film:window --vocals <vocals.wav> --words <words.json> --from N --to N --out <dir> [--name <id>]`:
+the clean vocal window for a sung clip, one phrase by word indices, cut with
+ffmpeg. It starts 0.05 s before word `--from` (never before the end of the word
+ahead) and ends in the gap after word `--to`. Words are merged into phrases
+across gaps of 0.35 s or less; each phrase is kept from 0.05 s before its first
+word to its last word's end plus a release tail that follows the stem's 10 ms
+energy until it falls 24 dB under the phrase's peak (at least the 15 ms fade, at
+most 0.40 s, never past the next word's start less 0.05 s); 15 ms
+raised-cosine ramps on every gate edge and silence elsewhere. The kept part is
+normalised to -16 dBFS RMS and limited to peaks at or under -1 dBFS (a 5 ms
+lookahead limiter, then the level again, until both hold). It writes
+`<name>.wav` (16-bit, 44.1 kHz, mono) and `<name>.mp3` (192 kbps; `<name>`
+defaults to `window-<from>-<to>`) and `window-report.json` with `t0`, `t1`,
+`length`, `tail`, the `phrases`, the `words`, `rms_dbfs` and `peak_dbfs`. A
+window under 4 s or over 8 s is refused with its length. `--allow-short` lifts
+the 4 s floor; it exists for the kit's tests (the test song's phrases are
+short) and a production run never passes it.
+
 ### The test song
 
 `python3 -I tests/fixtures/synth_song.py --out <dir>` builds the song every
@@ -404,6 +512,9 @@ linearly from 120 BPM at the first beat to 123 at the end. It writes `song.wav`
 `vocals.wav`, `drums.wav`, `lyrics.txt`, `display.txt` and `truth.json` (every
 word's start and end, the beats, downbeats, kicks, snares and hats, the
 sections and the tempo law). Two builds are byte for byte the same.
+`--hats-only 2,3` drops the kick and snare from those bars (counted from 0) and
+keeps their hats, for the hits and beats tests; the truth then lists only the
+kicks and snares played, and `hats_only_bars`.
 
 ## Refusals
 
@@ -504,6 +615,50 @@ for what the input held; a value from the input is printed JSON-quoted.
 - `--out is not a folder`
 - `the cmudict dictionary is not installed (pip install -r src/film/py/requirements.txt)`
 
+The listening commands share these: `--X cannot be read` for a path flag that is
+not a readable file, `--X cannot be read as audio` for one that is not audio,
+`--out is not a folder`, the argument parser's own words after
+`film:<name>: `, and `model K is not in "/opt/models" (run ...)` for a model
+they need (`htdemucs` for stems; `mms_fa` and `whisper_tiny` for words).
+
+`film:stems`: `film:stems: --in <path> and --out <dir> are required`.
+
+`film:beats`:
+
+- `film:beats: --drums <path> and --out <dir> are required`
+- `--downbeat-phase wants 0, 1, 2 or 3`
+- `--tempo-range wants low,high in BPM, between 40 and 300`
+- `--words needs --lyrics`, `--words is not a words.json`
+
+`film:words`:
+
+- `film:words: --vocals <path>, --lyrics <path> and --out <dir> are required`
+- `--min-conf wants a number from 0 to 1`
+- `the lyric sheet has no words to align`
+- `--display has N lines, the lyric sheet M`; one line per display line that
+  does not consume its words:
+  `display line 2 ("We count|3 windows.") shows 5 words, its lyric line has 4`
+- `--expect is not a words.json or a truth.json`,
+  `--expect has N words, the lyric sheet M`
+
+`film:hits`:
+
+- `film:hits: --stems <dir>, --mix <path> and --out <dir> are required`
+- `--stems is not a folder`, `--stems has no drums.wav` (or `vocals.wav`)
+- `--beats is not a beats.json`
+
+`film:window`:
+
+- `film:window: --vocals <path>, --words <path>, --out <dir>, --from <word> and --to <word> are required`
+- `--from and --to want word indices, --from no later than --to`
+- `--to N is past the last word (M)`
+- `--name wants letters, digits, - and _`
+- `--words is not a words.json`
+- `window is 2.31 s (6.91 to 9.22), want 4 to 8 s`
+
+Exit `3`, `film:words` only, with `words.json` and the report written: the
+check's line and the words off, as in [Listening](#listening-filmstems-filmbeats-filmwords-filmhits-filmwindow).
+
 Exit `1`, on stderr: `walk: the session file could not be removed`,
 `walk: unexpected failure`, `render: unexpected failure` (the report could not
 be written) and `changelog: unexpected failure`. A render step that fails exits
@@ -512,7 +667,9 @@ be written) and `changelog: unexpected failure`. A render step that fails exits
 `film:<name>: python film_py.<module> failed`,
 `... took longer than N minutes`, `... printed no result`, or
 `film:<name>: "python3" could not be started` (the interpreter's name, from
-`FILM_PYTHON` when set, JSON-quoted).
+`FILM_PYTHON` when set, JSON-quoted). `film:window` prints
+`film:window: ffprobe could not be started` (or `ffmpeg`) when the tool is not
+on the path, and `film:window: ffmpeg could not encode the MP3`.
 
 ## Brand sources
 
