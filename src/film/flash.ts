@@ -7,8 +7,10 @@ import { must, probeVideo } from "./lib/media.ts";
 // film:flash: the WCAG 2.3.1 flash check (toolkit item 21). ffmpeg decodes the video at 96x54
 // and 24 fps into temp; film_py.flash counts flashes (pairs of opposing luminance transitions of
 // 0.1 or more over a quarter of the frame) and single-frame pops (a frame over 0.03 off both
-// neighbours the same way). More than three flashes in any one-second window fails (exit 3, one
-// line per failing window, the report written with every window and pop). A pop is flagged, never
+// neighbours the same way), and red flashes (WCAG's separate rule: pairs of opposing changes, by a
+// quarter of the frame or more, in the share of pixels that are saturated red, R / (R + G + B)
+// >= 0.8). More than three flashes, or more than three red flashes, in any one-second window fails (exit 3,
+// one line per failing window, the report written with every window and pop). A pop is flagged, never
 // failed: one `warning:` line per pop on stdout, whatever the exit code.
 
 const COMMAND = "film:flash";
@@ -24,6 +26,11 @@ type Result = {
   flashes: { frame: number; t: number }[];
   worst: { t0: number; count: number };
   windows: { t0: number; t1: number; flashes: number }[];
+  red: number[];
+  red_transitions: unknown[];
+  red_flashes: { frame: number; t: number }[];
+  red_worst: { t0: number; count: number };
+  red_windows: { t0: number; t1: number; flashes: number }[];
   pops: { frame: number; t: number; mean: number; before: number; after: number }[];
   ok: boolean;
 };
@@ -49,20 +56,34 @@ async function main(): Promise<number> {
       outputs: { report: "flash-report.json" },
       frames: result.frames,
       seconds: Math.round((result.frames / FPS) * 1000) / 1000,
-      rule: { scale: `${W}x${H}`, fps: FPS, transition: 0.1, darker_under: 0.8, area: 0.25, max_flashes_per_second: 3, pop: 0.03 },
+      rule: { scale: `${W}x${H}`, fps: FPS, transition: 0.1, darker_under: 0.8, area: 0.25, max_flashes_per_second: 3, pop: 0.03, red: 0.8 },
       flashes: result.flashes,
       worst_second: result.worst,
       windows: result.windows,
+      red_flashes: result.red_flashes,
+      worst_red_second: result.red_worst,
+      red_windows: result.red_windows,
       pops: result.pops,
       transitions: result.transitions,
+      red_transitions: result.red_transitions,
       mean_luminance: result.mean,
+      red_fraction: result.red,
     });
     const warnings = result.pops.map((p) => `warning: a single-frame pop at ${p.t.toFixed(3)} s (frame ${p.frame}): mean luminance ${p.before} -> ${p.mean} -> ${p.after}`);
+    const span = (w: { t0: number; t1: number }) => `between ${w.t0.toFixed(3)} and ${w.t1.toFixed(3)} s, want at most 3`;
     if (!result.ok) {
-      throw new Failed([...result.windows.map((w) => `flash: ${w.flashes} flashes in one second between ${w.t0.toFixed(3)} and ${w.t1.toFixed(3)} s, want at most 3`), ...warnings]);
+      throw new Failed([
+        ...result.windows.map((w) => `flash: ${w.flashes} flashes in one second ${span(w)}`),
+        ...result.red_windows.map((w) => `flash: ${w.flashes} red flashes in one second ${span(w)}`),
+        ...warnings,
+      ]);
     }
     const pops = result.pops.length;
-    console.log(`flash: clean, ${result.frames} frames, at most ${result.worst.count} flash${result.worst.count === 1 ? "" : "es"} in any second, ${pops === 0 ? "no pops" : `${pops} pop${pops === 1 ? "" : "s"} flagged`}`);
+    const most = result.worst.count;
+    const red = result.red_worst.count;
+    console.log(
+      `flash: clean, ${result.frames} frames, at most ${most} flash${most === 1 ? "" : "es"} and ${red} red flash${red === 1 ? "" : "es"} in any second, ${pops === 0 ? "no pops" : `${pops} pop${pops === 1 ? "" : "s"} flagged`}`,
+    );
     for (const line of warnings) console.log(line);
     return EXIT.done;
   } finally {

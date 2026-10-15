@@ -28,7 +28,7 @@ const report = (out: string) => JSON.parse(readFileSync(join(dir, out, "flash-re
 test("a steady picture with a slow fade is clean", () => {
   const result = film("flash", dir, ["--video", video("steady.mp4", "60+N*2"), "--out", "steady"]);
   assert.equal(result.status, 0, result.stdout + result.stderr);
-  assert.deepEqual(lines(result.stdout), ["flash: clean, 48 frames, at most 0 flashes in any second, no pops"]);
+  assert.deepEqual(lines(result.stdout), ["flash: clean, 48 frames, at most 0 flashes and 0 red flashes in any second, no pops"]);
   const r = report("steady");
   assert.equal(r.ok, true);
   assert.deepEqual(r.windows, []);
@@ -58,11 +58,45 @@ test("a single-frame pop is flagged as a warning, never failed (R-a)", () => {
   assert.equal(result.status, 0, result.stdout + result.stderr);
   const out = lines(result.stdout);
   assert.equal(out.length, 2);
-  assert.equal(out[0], "flash: clean, 48 frames, at most 0 flashes in any second, 1 pop flagged");
+  assert.equal(out[0], "flash: clean, 48 frames, at most 0 flashes and 0 red flashes in any second, 1 pop flagged");
   assert.match(out[1], /^warning: a single-frame pop at 0\.500 s \(frame 12\): mean luminance 0\.1\d+ -> 0\.1\d+ -> 0\.1\d+$/);
   assert.equal(report("pop").ok, true);
   assert.equal(report("pop").pops.length, 1);
   assert.deepEqual(report("pop").flashes, []);
+});
+
+// Full-screen saturated red (255, 0, 0) and the gray of equal relative luminance (127: linear
+// 0.2126), alternating every `half` frames; lossless RGB, so the red stays saturated.
+function redGray(name: string, half: number, seconds = 2): string {
+  const on = `lt(mod(N,${2 * half}),${half})`;
+  const result = spawnSync("ffmpeg", [
+    "-y", "-loglevel", "error", "-f", "lavfi", "-i", `color=c=black:s=192x108:r=24:d=${seconds}`,
+    "-vf", `format=rgb24,geq=r='if(${on},255,127)':g='if(${on},0,127)':b='if(${on},0,127)'`,
+    "-c:v", "libx264rgb", "-preset", "ultrafast", "-qp", "0", join(dir, name),
+  ], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  return name;
+}
+
+test("saturated red flashes at equal luminance: six a second fail, two pass", () => {
+  const fast = film("flash", dir, ["--video", redGray("red6.mp4", 2), "--out", "red6"]);
+  assert.equal(fast.status, 3, fast.stdout + fast.stderr);
+  const out = lines(fast.stdout);
+  assert.equal(out.length, 1);
+  assert.match(out[0], /^flash: 6 red flashes in one second between \d\.\d{3} and \d\.\d{3} s, want at most 3$/);
+  const r = report("red6");
+  assert.equal(r.ok, false);
+  // The luminance alone sees nothing: the general count stays clean.
+  assert.equal(r.worst_second.count, 0);
+  assert.deepEqual(r.windows, []);
+  assert.equal(r.worst_red_second.count, 6);
+  assert.ok(r.red_windows.length >= 1);
+  assert.equal(r.rule.red, 0.8);
+
+  const slow = film("flash", dir, ["--video", redGray("red2.mp4", 6), "--out", "red2"]);
+  assert.equal(slow.status, 0, slow.stdout + slow.stderr);
+  assert.deepEqual(lines(slow.stdout), ["flash: clean, 48 frames, at most 0 flashes and 2 red flashes in any second, no pops"]);
+  assert.equal(report("red2").worst_red_second.count, 2);
 });
 
 test("refusals: missing flags, a file that is not a video", () => {

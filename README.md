@@ -1016,11 +1016,21 @@ remembers the frames a page has drawn, so the tests can show the check fails.
 the frame's mean one way by 0.1 or more, the darker end under 0.8, a quarter of
 the pixels moving 0.1 the same way; a flash is a pair of opposing transitions
 (pairs, not transitions); more than three in any one-second window fails (exit
-3, one line per failing stretch). A single-frame pop (a frame 0.03 off both
+3, one line per failing stretch). The red flash is WCAG's separate rule and is
+counted beside it: a pixel is saturated red when R / (R + G + B) >= 0.8 (the
+8-bit values); a red transition is a run of the frame's saturated-red share one
+way by a quarter of the frame or more; red flashes are pairs of opposing red
+transitions, and more than three in any second fails too
+(`flash: 6 red flashes in one second between 0.000 and 1.042 s, want at most 3`),
+so saturated red against a gray of equal luminance, which the mean does not
+see, is caught. A clean run prints
+`flash: clean, 240 frames, at most 0 flashes and 0 red flashes in any second, no pops`. A single-frame pop (a frame 0.03 off both
 neighbours the same way) is flagged, never failed: one
 `warning: a single-frame pop at 0.500 s (frame 12): mean luminance 0.127 -> 0.165 -> 0.127`
 line per pop, whatever the exit code. The report lists every transition, flash,
-window and pop and the mean luminance per frame.
+window and pop and the mean luminance per frame, and the same for the red flash
+(`red_transitions`, `red_flashes`, `worst_red_second`, `red_windows`,
+`red_fraction` per frame).
 
 `film:mix` places each event's sound (`<sounds>/<kind>.wav`) at its time and
 gain, ducks the events under the vocal stem with `sidechaincompress`, adds the
@@ -1495,7 +1505,8 @@ failing gate; `film:edl`, one `edl: "s004" has neither a take nor a plate (clip 
 per shot, and no `edl.json`; `film:window`, `window: the kept phrases are silent (...)`
 and no audio; `film:beats`, `beats: the drum stem is silent (no onsets)` and no `beats.json`; `film:sync`, `sync: "take-2.mp4" does not copy the window (NCC 0.04, want over 0.2)`;
 `film:gate`, `gate: 10/12` and a line per word not drawn; `film:history`, the differing pixel; `film:flash`,
-`flash: 4 flashes in one second between 0.042 and 2.000 s, want at most 3`; `film:mix`,
+`flash: 4 flashes in one second between 0.042 and 2.000 s, want at most 3` (and
+`flash: 6 red flashes in one second ...` for red flashes); `film:mix`,
 `mix: -20.1 LUFS, the master -18.3 LUFS (-1.8 LU off, want within 1)`.
 
 Exit `1`, on stderr: `walk: the session file could not be removed`,
