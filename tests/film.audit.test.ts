@@ -569,6 +569,18 @@ test("refusals: one line each on stdout, exit 2, nothing written", () => {
   }
 });
 
+test("a --recordings at the report's own path is refused, the file untouched", () => {
+  mkdirSync(join(dir, "recself"));
+  const own = join(dir, "recself", "audit-report.json");
+  writeFileSync(own, readFileSync(join(dir, "recordings.json")));
+  const before = readFileSync(own, "utf8");
+  const result = audit("shots.json", "recself", ["--recordings", "recself/audit-report.json"]);
+  assert.equal(result.status, 2, result.stdout + result.stderr);
+  assert.deepEqual(lines(result.stdout), ["--recordings is the report's path (audit-report.json in --out): the report would overwrite it"]);
+  assert.equal(readFileSync(own, "utf8"), before);
+  assert.deepEqual(readdirSync(join(dir, "recself")), ["audit-report.json"]);
+});
+
 test("anything unexpected is exit 1 with one line on stderr", () => {
   mkdirSync(join(dir, "y", "audit-report.json"), { recursive: true });
   const result = audit("shots.json", "y");

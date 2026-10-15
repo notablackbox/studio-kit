@@ -1287,7 +1287,8 @@ for what the input held; a value from the input is printed JSON-quoted.
 
 Every film command that reads an input file refuses one that is its own report
 (`<name>-report.json` in `--out`, by its spelling, through a linked folder, or
-through a link to the report), since the report would replace it:
+through a link to the report), since the report would replace it (optional
+inputs too, such as `film:audit`'s `--walk-report` and `--recordings`):
 `--words is the report's path (gate-report.json in --out): the report would overwrite it`,
 one line per such flag. The lists below do not repeat it.
 

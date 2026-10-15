@@ -647,7 +647,7 @@ async function main(): Promise<number> {
   const out = fromCaller(values.out);
   const problem = outProblem(out);
   if (problem) throw new Refused([problem]);
-  refuseReportPaths(out, "audit", [["--board", paths.board], ["--beats", paths.beats], ["--words", paths.words], ["--hits", paths.hits], ["--display", paths.display], ["--walk-report", walkReport]]);
+  refuseReportPaths(out, "audit", [["--board", paths.board], ["--beats", paths.beats], ["--words", paths.words], ["--hits", paths.hits], ["--display", paths.display], ["--walk-report", walkReport], ["--recordings", recordings]]);
 
   const result = auditBoard(board, analysis, { leadShare, motionSeconds, motionClips, taboo, hooks, deferProvenance: defer.includes("provenance"), provenance });
   const failing = result.gates.filter((g) => g.status === "fail");
