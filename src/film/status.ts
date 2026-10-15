@@ -1,5 +1,5 @@
-import { readFileSync, statSync } from "node:fs";
-import { basename, dirname } from "node:path";
+import { readFileSync, realpathSync, statSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import {
   EXIT,
   Refused,
@@ -162,6 +162,9 @@ async function main(): Promise<number> {
   if (!current.status) throw new Refused([current.problem!]);
   const problem = outProblem(out);
   if (problem) throw new Refused([problem]);
+  if (isReportPath(file, out)) {
+    throw new Refused(["--status is the report's path (status-report.json in --out): the report would overwrite it"]);
+  }
 
   let status = current.status;
   const changing = Object.keys(set).length > 0;
@@ -195,6 +198,18 @@ async function main(): Promise<number> {
   }
   console.log(printable(JSON.stringify(status, null, 2)));
   return EXIT.done;
+}
+
+// Whether the status file and the report are one file: both are written into their folder by
+// name (a rename that replaces a link at the name), so the folders are compared through their
+// real paths and the names as given. An --out not made yet cannot hold the status file.
+function isReportPath(file: string, out: string): boolean {
+  if (basename(file) !== "status-report.json") return false;
+  try {
+    return join(realpathSync(dirname(file)), basename(file)) === join(realpathSync(out), "status-report.json");
+  } catch {
+    return false;
+  }
 }
 
 if (isMain(import.meta.url)) run(COMMAND, main);

@@ -251,6 +251,32 @@ test("--out that is a file is refused before anything is written", () => {
   assert.equal(readFileSync(file, "utf8"), before);
 });
 
+test("a status file that is the report's own path is refused, the file untouched", () => {
+  const dir = tempDir();
+  const file = join(dir, "status-report.json");
+  writeFileSync(file, JSON.stringify(VALID, null, 2));
+  const before = readFileSync(file, "utf8");
+  const cases: string[][] = [
+    ["--status", "status-report.json"],
+    ["--status", "status-report.json", "--set", "stage=listen"],
+    ["--status", "status-report.json", "--out", "."],
+    ["--status", "./sub/../status-report.json", "--out", dir],
+  ];
+  for (const args of cases) {
+    const result = status(dir, args);
+    assert.equal(result.status, 2, `${JSON.stringify(args)}: ${result.stdout}${result.stderr}`);
+    assert.deepEqual(lines(result.stdout), [
+      "--status is the report's path (status-report.json in --out): the report would overwrite it",
+    ]);
+    assert.equal(readFileSync(file, "utf8"), before);
+    assert.deepEqual(readdirSync(dir), ["status-report.json"]);
+  }
+  // Elsewhere, the same file is fine.
+  const ok = status(dir, ["--status", "status-report.json", "--out", "reports"]);
+  assert.equal(ok.status, 0, ok.stdout + ok.stderr);
+  assert.equal(readFileSync(file, "utf8"), before);
+});
+
 test("an unexpected failure exits 1 with one short line on stderr and nothing on stdout", () => {
   const { dir } = project();
   // A folder where the report goes: the rename onto it fails.

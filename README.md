@@ -426,6 +426,9 @@ old text is put back before the exit 1, so a failed run never leaves a changed
 
 `status-report.json`: `ok`, `inputs` (`status`, the `set` pairs), `outputs`
 (`status`, the file when it was written, else null; `report`) and the `status`.
+The status file cannot be the report itself: a `--status` that resolves to
+`status-report.json` in `--out` (or beside it, with no `--out`) is refused,
+exit 2, before anything is written.
 
 ### `film:score`
 
@@ -1245,6 +1248,7 @@ for what the input held; a value from the input is printed JSON-quoted.
   `awaiting must be JSON: null or {kind, id}`,
   `expects must be JSON: a list of {key, name}`
 - `status file cannot be read as JSON`, `status file is not a JSON object`
+- `--status is the report's path (status-report.json in --out): the report would overwrite it`
 - `X is missing` for a schema field; `version is N, want 1`;
   `stage is "...", want one of brief, song, ...`;
   `step must be a non-empty string`; `awaiting must be null or {kind, id}`,
