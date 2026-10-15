@@ -36,7 +36,8 @@ npm run changelog -- --in entry.md --out card.html
 The film commands also want Python 3 with the pinned CPU wheels of
 `src/film/py/requirements.txt`, espeak-ng and sox (for the test song), and the
 model weights in `$FILM_MODELS` ([film](#film)). In the container the CI uses,
-which is the same image the sandbox builds from, with the same steps the CI runs:
+which is the same image the sandbox builds from, with the same steps the CI runs
+([Test image and CI](#test-image-and-ci) lists them and the times):
 
 ```bash
 docker run --rm -v "$PWD":/kit -w /kit mcr.microsoft.com/playwright:v1.63.0-noble sh -c '
@@ -62,21 +63,21 @@ npm --prefix /opt/studio run film:stems -- --in <song.wav> --out <dir>
 npm --prefix /opt/studio run film:beats -- --drums <drums.wav> --out <dir> [--lyrics <lyrics.txt> [--words <words.json>]] [--downbeat-phase N] [--tempo-range low,high]
 npm --prefix /opt/studio run film:words -- --vocals <vocals.wav> --lyrics <lyrics.txt> --out <dir> [--display <display.txt>] [--expect <words.json>] [--min-conf X]
 npm --prefix /opt/studio run film:hits -- --stems <dir> --mix <song.wav> --out <dir> [--beats <beats.json>]
-npm --prefix /opt/studio run film:window -- --vocals <vocals.wav> --words <words.json> --from N --to N --out <dir> [--name <id>]
+npm --prefix /opt/studio run film:window -- --vocals <vocals.wav> --words <words.json> --from N --to N --out <dir> [--name <id>] [--allow-short (tests only)]
 npm --prefix /opt/studio run film:audit -- --board <shots.json> --beats <beats.json> --words <words.json> --hits <hits.json> --display <display.txt> --out <dir> [--lead-share 0.7] [--motion-seconds N] [--motion-clips N] [--taboo word,word] [--hooks "A|B|C"] [--defer provenance] [--walk-report <walk-report.json>] [--recordings <recordings.json>]
 npm --prefix /opt/studio run film:sheet -- --board <shots.json> --plates <dir> --out <dir>
 npm --prefix /opt/studio run film:depth -- --plate <plate.png> --out <dir>
 npm --prefix /opt/studio run film:edl -- --board <shots.json> --clips <dir> --words <words.json> --out <dir>
 npm --prefix /opt/studio run film:request -- --clip <clips/W01.json> --provider openrouter|higgsfield --ledger <ledger.jsonl> --out <dir> --start-artifact <id> [--window-artifact <id>] [--resolution 720p] [--rate-per-second X]
 npm --prefix /opt/studio run film:request -- --image <slot.json> --provider openrouter --ledger <ledger.jsonl> --out <dir> [--rate-per-image X]
-npm --prefix /opt/studio run film:ledger -- --ledger <ledger.jsonl> --out <dir> --asked <request.json> | --polled <key> | --delivered <key> --file <path> | --declined <key> | --failed <key> | --check <reference> [--figures <json>] [--reason <text>]
+npm --prefix /opt/studio run film:ledger -- --ledger <ledger.jsonl> --out <dir> --asked <request.json> [--meta <request.meta.json>] | --polled <key> | --delivered <key> --file <path> | --declined <key> | --failed <key> | --check <reference> [--figures <json>] [--reason <text>]
 npm --prefix /opt/studio run film:sync -- --take <take.mp4> --window <window.wav> --beats <beats.json> --song-t0 <s> --out <dir>
-npm --prefix /opt/studio run film:chapter -- --board <shots.json> --edl <edl.json> --words <words.json> --beats <beats.json> --hits <hits.json> --display <display.txt> --plates <dir> --clips <dir> [--footage <dir>] [--brand <dir>] --chapter <id> --out <dir> [--range t0:t1] [--vertical]
+npm --prefix /opt/studio run film:chapter -- --board <shots.json> --edl <edl.json> --words <words.json> --beats <beats.json> --hits <hits.json> --display <display.txt> --plates <dir> --clips <dir> [--footage <dir>] [--brand <dir>] --chapter <id> --out <dir> [--range t0:t1] [--vertical] [--no-ramp (FILM_TEST=1 only)]
 npm --prefix /opt/studio run film:gate -- --tokens <chapter.tokens.json> --words <words.json> --display <display.txt> --out <dir>
-npm --prefix /opt/studio run film:history -- <film:chapter's flags, no --range> --frames A,B
+npm --prefix /opt/studio run film:history -- <film:chapter's flags, no --range> --frames A,B [--test-leak (FILM_TEST=1 only)]
 npm --prefix /opt/studio run film:flash -- --video <mp4> --out <dir>
 npm --prefix /opt/studio run film:mix -- --master <song.wav> --events <ch01.audio.json> [<ch02.audio.json> ...] --vocals <vocals.wav> --sounds <dir> --out <dir>
-npm --prefix /opt/studio run film:encode -- --chapters <ch01.mp4> [<ch02.mp4> ...] --mix <mix.wav> --out <dir>
+npm --prefix /opt/studio run film:encode -- --chapters <ch01.mp4> [<ch02.mp4> ...] --mix <mix.wav> --out <dir> [--allow-unramped]
 npm --prefix /opt/studio run film:reframe -- <film:chapter's flags> [--aspect 9:16]
 npm --prefix /opt/studio run film:captions -- --words <words.json> --display <display.txt> --out <dir> [--video <mp4>] [--brand <dir>]
 ```
@@ -343,6 +344,47 @@ it. A model already in the folder (its entry's files all there, or its expected
 files found without an entry) is listed as `present` and left alone: it is not
 downloaded again, and a run that cannot reach the network never turns it into
 `missing`.
+
+The environment the film commands read:
+
+| Variable | Meaning |
+|---|---|
+| `FILM_MODELS` | The models folder (default `/opt/models`). A command that needs a model absent from it refuses with exit 2. |
+| `FILM_PYTHON` | The interpreter the Python side runs with (default `python3`, the venv's when the venv is first on the path). |
+| `FILM_DEBUG=1` | Shows the Python module's own stderr tail, and Remotion's, after an exit 1. |
+| `FILM_TEST=1` | Unlocks the test-only flags `film:chapter --no-ramp` and `film:history --test-leak`; without it they are refused. The kit's tests set it; a production run never does. |
+
+The commands, in the order of a production, with what each writes in `--out`
+and the exit codes it can end with (every one can also end with `1`):
+
+| Command | Writes | Exits |
+|---|---|---|
+| `film:status` | `status.json` (with `--set`), `status-report.json` | 0, 2 |
+| `film:score` | `score-report.json` | 0, 2 |
+| `film:stems` | `stems/vocals.wav`, `drums.wav`, `bass.wav`, `other.wav`, `stems-report.json` | 0, 2 |
+| `film:beats` | `beats.json`, `beats-report.json` | 0, 2 |
+| `film:words` | `words.json`, `words-report.json` | 0, 2, 3 |
+| `film:hits` | `hits.json`, `hits-report.json` | 0, 2 |
+| `film:window` | `<name>.wav`, `<name>.mp3`, `window-report.json` | 0, 2 |
+| `film:audit` | `audit-report.json` | 0, 2, 3 |
+| `film:sheet` | `sheet.pdf`, `sheet.html`, `sheet-report.json` | 0, 2 |
+| `film:depth` | `<plate>.depth.png`, `.near.png`, `.mid.png`, `.far.png`, `.boxes.json`, `depth-report.json` | 0, 2 |
+| `film:edl` | `edl.json`, `edl-report.json` | 0, 2, 3 |
+| `film:request` | `<id>.request.json`, `<id>.request.meta.json`, `request-report.json` | 0, 2 |
+| `film:ledger` | one row appended to the ledger, `ledger-report.json` | 0, 2 |
+| `film:sync` | `<take>-sync.png`, `sync-report.json` | 0, 2, 3 |
+| `film:chapter` | `<chapter>.mp4`, `<chapter>.tokens.json`, `<chapter>.audio.json`, `chapter-report.json` | 0, 2 |
+| `film:gate` | `gate-report.json` | 0, 2, 3 |
+| `film:history` | `history-<B>.png`, `history-<A>-then-<B>.png`, `history-report.json` | 0, 2, 3 |
+| `film:flash` | `flash-report.json` | 0, 2, 3 |
+| `film:mix` | `mix.wav`, `mix-report.json` | 0, 2, 3 |
+| `film:encode` | `master.mp4`, `review.mp4`, `encode-report.json` | 0, 2 |
+| `film:reframe` | `<chapter>.9x16.mp4`, `<chapter>.9x16.tokens.json`, `<chapter>.9x16.audio.json`, `reframe-report.json` | 0, 2 |
+| `film:captions` | `captions.srt`, `captioned.mp4` (with `--video`), `captions-report.json` | 0, 2 |
+
+Each command's flags are in the sandbox calls under [Run it](#run-it), its
+work in its section below, and every line it can print under
+[Refusals](#refusals).
 
 ### `film:status`
 
@@ -986,6 +1028,105 @@ sections and the tempo law). Two builds are byte for byte the same.
 keeps their hats, for the hits and beats tests; the truth then lists only the
 kicks and snares played, and `hats_only_bars`.
 
+The other fixtures: `tests/fixtures/board/` (the five-shot board and its
+analysis, see [The board](#the-board-filmaudit-filmsheet-filmdepth-filmedl)),
+`tests/fixtures/requests/` (the recorded request bodies) and
+`tests/fixtures/chapter.ts` (the ten-second test chapter, built in temp from
+the board fixture, painted plates, a `testsrc2` take and SMPTE-bar footage).
+Nothing in them is a real person, a real tenant or licensed audio.
+
+## Test image and CI
+
+The tests run in one container. To rebuild the image the kit's tests are run
+in (`studio-kit-test:local` here), do what CI does, in this order:
+
+1. Start from `mcr.microsoft.com/playwright:v1.63.0-noble` (Node, Chromium's
+   libraries, Ubuntu 24.04).
+2. `apt-get install --no-install-recommends` ffmpeg, fonts-inter,
+   fonts-noto-core, fonts-noto-color-emoji, fonts-noto-cjk, sox, espeak-ng,
+   python3, python3-pip and python3-venv.
+3. Make a venv at `/opt/film-venv` and put its `bin` first on `PATH`.
+4. In it, install torch, torchaudio and torchvision at the pins of
+   `src/film/py/requirements.txt` from `https://download.pytorch.org/whl/cpu`
+   (so nothing pulls a CUDA build), then `pip install -r` that file.
+5. Set `FILM_MODELS=/opt/models` and run
+   `python3 -I src/film/py/film_py/models.py --dest /opt/models` (about
+   1.5 GB, no token needed).
+6. Run `python3 -I src/film/py/film_py/sounds.py --dest /opt/sounds` for
+   `film:mix`'s sounds (the tests make their own; a production image needs
+   them).
+7. With the kit mounted at `/kit`: `npm ci`, `npx remotion browser ensure`,
+   `npm test`.
+
+Measured on a 4-CPU, 6 GB container: a clean build takes about 3 minutes on
+a fast network (apt 34 s, torch 26 s, the rest of the pins 20 s, the models
+27 s, export 79 s), and the image is 8.65 GB (the venv 1.6 GB, the models
+1.5 GB). `npm test` takes 6 minutes 20 seconds (306 tests); the Teaser's full
+master render is 4 of those minutes, and the film chapter tests about one.
+The two heaviest renders (the Teaser's master and the film chapter file) take
+a lock in the temp folder (`tests/fixtures/heavy.ts`) so they never run side
+by side; side by side on 4 CPUs a Remotion frame could pass its 30 s limit.
+
+`.github/workflows/ci.yml` is one job of those steps on the free
+`ubuntu-latest` runner, with `timeout-minutes: 30`. The venv is cached on the
+hash of `requirements.txt` (and the image), the models on the hash of
+`requirements.txt` and `models.py`, so either is rebuilt only when its pins
+move. Estimated from the measures above (not yet seen on GitHub):
+
+| Step | Cold | Warm |
+|---|---|---|
+| pull the Playwright image | 1.5 min | 1.5 min |
+| apt | 1 min | 1 min |
+| venv (pip, or restore 1.6 GB) | 2 min | 0.75 min |
+| models (download, or restore 1.5 GB) | 1 min | 0.75 min |
+| sounds, `npm ci`, browser | 1 min | 1 min |
+| `npm test` | 6.5 min | 6.5 min |
+| saving the two caches | 1.5 min | none |
+| in all | about 15 min | about 11 min |
+
+That is on a 4-vCPU runner (public repositories). A private repository's free
+runner has 2 vCPUs and 7 GB, which may double the suite to about 12 minutes
+(about 20 cold): still inside the limit, but with less room. The two caches
+take about 3 GB of the repository's 10 GB, and the job needs about 11 GB of
+the runner's disk.
+
+## Known limits in v0.2.0
+
+Found in review and left for a later release, one line each:
+
+- The aligner, the beat map, the hits and the sync measure are tested on a synthetic spoken song, never on real singing; the first live film is that test.
+- The fixture test of the drum hits is weak (the truth is exact by construction, the audio check loose).
+- The Python runner's time limit is tested by render's runner tests, not by a film test.
+- The 64 KB lyric limit is checked in Node only; a Python library that prints on stdout turns a run into exit 1.
+- Floating-point results may differ in the last digits between machines.
+- No automated test proves that every command writes only in `--out` (checked by hand).
+- torch.hub could try a download if `models.json` lies about a file (the offline switches guard it).
+- `models.py` recognises htdemucs by its exact weight file name.
+- The whisper fallback test passes 8 of 10 words against a bar of 7, and is sensitive to the thread count.
+- Words corrected by hand are not kept when `film:words` runs again.
+- `film:window --allow-short` is accepted in production, though it is meant for the tests only.
+- The trailing gap after the last word is not exercised by the fixture.
+- A real hat played within 45 ms of a snare is dropped as the snare's noise.
+- The audit does not check a shot's declared hit against `hits.json`, and any hit in `hits.json` passes a cut.
+- The audit does not warn about a clip no shot plays.
+- The audit does not check a shot's word line against `display.txt`, a plate key against `plates[]`, or that chapters tile the song.
+- The depth test depends on the model's output.
+- A "no take" fallback is noted in the edl report only (the edit list format has no note field).
+- `{footage}` in the edit list plays from the file's first frame; there is no in point.
+- `film:sync` decides copy or diverged on the whole take's NCC, so a take at 0.157 that holds 99 percent of its sung seconds exits 3; read the synced spans too.
+- OpenRouter's `unsigned_urls[0]` download field is as documented, not yet seen live; re-read at spend.
+- A take that starts late (negative lag, missing head) is not counted as a divergence.
+- The request meta file repeats the key and the estimate of the request.
+- The chapter plan is built twice, in Node and in the browser, from the same inputs.
+- Burned-in captions are not measured for BT.709 tags, and the burn font's provenance is not checked by a test.
+- The 9:16 device heights are estimates; a long label may spill.
+- 2.5D has no inpainting: the near layer shows a thin duplicate edge.
+- A board accent is used only when `palette.json` lists it; otherwise the palette's accent.
+- `film:chapter` stages takes and plates in temp (hard links where it can), so long takes can double disk use during a render.
+- `film:mix`'s loudness exit 3 and `film:history`'s exit 3 have no natural fixture (history fails only through the test probe).
+- `film:chapter --no-ramp` is a production flag locked behind `FILM_TEST=1`; ramps guard single pops, not dense swaps.
+- The test image's Dockerfile is not in the repository; `ci.yml` and [Test image and CI](#test-image-and-ci) are the recipe.
+
 ## Refusals
 
 Every line below is printed on stdout and ends the script with exit `2`, with
@@ -1148,7 +1289,8 @@ schema problem (as in [The board](#the-board-filmaudit-filmsheet-filmdepth-filme
 `--plates is not a folder`.
 
 `film:depth`: `film:depth: --plate <png> and --out <dir> are required`,
-`--plate is not a PNG`, `--plate is 200x120 px, want at least 256 px on each side`,
+`--plate is not a PNG`, `--plate cannot be read as an image`,
+`--plate is 200x120 px, want at least 256 px on each side`,
 and `model depth is not in "/opt/models" (run ...)`.
 
 `film:edl`:
@@ -1164,17 +1306,22 @@ and `model depth is not in "/opt/models" (run ...)`.
 - `--provider "fal" has no known URL (openrouter or higgsfield)`,
   `"P001" model "google/gemini-3-pro-image" has no known URL on higgsfield`
 - `--resolution is "4k", want 480p, 720p or 1080p`, `--rate-per-second is "0", want dollars above 0`,
-  `no rate for bytedance/seedance-2.5 on higgsfield at 1080p: give --rate-per-second`
+  `no rate for bytedance/seedance-2.5 on higgsfield at 1080p: give --rate-per-second`,
+  `no rate for google/gemini-3-pro-image on openrouter: give --rate-per-image`
 - `--start-artifact is required for a clip`, `"W01" is sung: --window-artifact is required`,
   `"M01" is a motion clip: it takes no --window-artifact`, `--image takes no --start-artifact or --window-artifact`,
   `--start-artifact wants an artifact id (letters, digits, . _ : -)`
-- `--clip is not a clip file`, `--clip: "W09.json" holds clip "W01"`, `"W01" kind is "dance", want sung or motion`
+- `--clip is not a clip file`, `--clip: "W09.json" holds clip "W01"`, `"W01" kind is "dance", want sung or motion`,
+  `--image is not an image slot file`, `--image: "P002.json" holds image slot "P001"`,
+  `--image: "slot.json" has no id that names a file` (or `--clip`)
 - one line per problem in the clip: `"W01" has no body.prompt` (`start`, `window`, `words`, `body.duration`, `model`),
   `"W01" window is 3.50 s (0.98 to 4.48), want 4 to 8 s`,
+  `"W01" body.resolution is "4k", want 480p, 720p or 1080p`,
   `"W01" words have braces: the lyric goes in plain quotes` (or `prompt has braces`),
   `"W01" words have a double quote: the kit quotes the lyric`,
   `"W01" prompt has output settings ("720p", "16:9"): they go in the request, never the prompt`,
-  `"W01" sung prompt is 120 words, want 110 or fewer`
+  `"W01" sung prompt is 120 words, want 110 or fewer`,
+  `"P001" refs want artifact ids (letters, digits, . _ : -)` (an image slot)
 - `"W01" was declined on openrouter: no request for it on any provider`
 - `--ledger line 3 is not a ledger row`
 
@@ -1200,6 +1347,7 @@ and `model depth is not in "/opt/models" (run ...)`.
 - `film:sync: --take, --window, --beats, --song-t0 and --out are required`
 - `--take has no audio stream`, `--window cannot be read as audio`, `--beats is not a beats.json`,
   `--song-t0 is "soon", want seconds from 0`
+- `--take and --window must each hold at least 0.5 s of audio`
 
 `film:chapter` and `film:reframe` (and `film:history`, with `--frames`):
 
@@ -1216,7 +1364,10 @@ and `model depth is not in "/opt/models" (run ...)`.
   `--plates: "s001" plays plate "p-dawn", which is not in the plates folder`,
   `--plates: "s005" is plate3d and plate "p-roof" has no near, mid and far mattes`,
   `--footage: "s004" plays footage "shot-01.mp4" and no --footage folder was given`,
-  `--footage: "s004" footage "../board/shots.json" is outside the footage folder`
+  `--footage: "s004" footage "../board/shots.json" is outside the footage folder`,
+  `--footage: "s004" plays "shot-01.mp4", which is not in the footage folder`,
+  `--plates: "p-dawn.png" cannot be read as an image`,
+  `--edl: "s003" has an entry that is not segs, plate, footage or design`
 - the fit checks below measure the text drawn: an entry with no text of its own is fitted on its display line
 - `--board: "s005" is plate3d and needs a treatment (one of push, drift, parallax-left, parallax-right, rise, settle)`,
   `--board: "s002" type[1] shows 3 sung words, line 1 has 4 in words.json`,
@@ -1233,7 +1384,8 @@ and `model depth is not in "/opt/models" (run ...)`.
 `--words is not a words.json`, `--display has 3 lyric lines, words.json has 4`,
 `--display line 1 ("We count|2 the windows.") shows 5 sung words, words.json has 4`.
 
-`film:flash`: `film:flash: --video and --out are required`, `--video cannot be read as a video`.
+`film:flash`: `film:flash: --video and --out are required`, `--video cannot be read as a video`,
+`--video has no frames`.
 
 `film:mix`:
 
@@ -1286,9 +1438,16 @@ prints `film:sheet: the browser could not be started`,
 `film:sheet: the sheet printed on N pages, not M`. The rendering commands print
 `film:chapter: rendering FilmChapter failed` (Remotion's own tail on stderr
 under `FILM_DEBUG=1`), `film:chapter: ch01.mp4 measures WxH, want 1920x1080`,
-`film:history: FilmHistory rendered N frames, want 2`, `film:encode: master.mp4 runs 5.000 s, the chapters 3.500 s`
-(an encode that does not measure up), `film:<name>: ffmpeg took longer than 5 minutes`, and
-`film:<name>: npx could not be started`.
+`film:chapter: ch01.mp4 cannot be read back`,
+`film:history: FilmHistory rendered N frames, want 2`,
+`film:history: the two renders of frame B differ in size`,
+`film:encode: master.mp4 runs 5.000 s, the chapters 3.500 s` (an encode that
+does not measure up; every problem of both files on one line, joined by `; `),
+`film:mix: measuring the loudness of mix.wav failed`,
+`film:mix: the loudness of song.wav could not be measured`,
+`film:<name>: ffmpeg took longer than 5 minutes`, and
+`film:<name>: npx could not be started`. `film:sheet` also prints
+`film:sheet: playwright could not be loaded`.
 
 ## Brand sources
 
