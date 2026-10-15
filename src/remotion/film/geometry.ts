@@ -32,12 +32,26 @@ export function geometry(vertical: boolean) {
     below: py + ph + 56, // 9:16: where the type beneath the picture starts
     above: { x: margin.l, y: 150, w: width - margin.l - margin.r, h: py - 150 - 32 } as Box, // 9:16: the devices' band
     text: width - margin.l - margin.r,
+    // The subtitle's band: 58 percent of the 16:9 frame's width (the text width in 9:16); its
+    // type is set 44 px narrower (22 px of padding either side).
+    subtitleBand: vertical ? width - margin.l - margin.r : Math.round(width * 0.58),
     sizes: {
       subtitle: { max: 44, min: 36, lines: 2 },
       coverline: { max: 88, min: 56, lines: vertical ? 2 : 1 },
       masthead: { max: Math.round(base * 0.16), min: Math.round(base * (vertical ? 0.09 : 0.12)), lines: 2 },
     },
   };
+}
+
+// A stack's row sizes: one word to a row, from 6.5 to 14 percent of the 16:9 master's height,
+// each row bigger than the one above (`all` the block's words, `k` the row); a row steps down
+// to fit the frame's width on one line, never under its floor (56 px, or `want` when smaller).
+export function stackSize(vertical: boolean, height: number, all: number, k: number): { want: number; min: number } {
+  const base = vertical ? 1080 : height;
+  const small = Math.round(base * 0.065);
+  const big = Math.round(base * 0.14);
+  const want = all <= 1 ? big : Math.round(small + ((big - small) * k) / (all - 1));
+  return { want, min: Math.min(want, 56) };
 }
 
 // A device's height at full size, estimated from its kind and params (panel padding, the mono

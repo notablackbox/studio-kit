@@ -240,6 +240,29 @@ test("I7: a coverline or masthead that cannot fit at its floor is refused, namin
   assert.deepEqual(problemsOf(CHAPTER_BOARD, { vertical: true }), []);
 });
 
+test("a subtitle over its lines, or a stack token wider than the frame, at the floor size is refused", () => {
+  const filler = "and-on-and-on-and-on|0 ".repeat(8);
+  const subtitle = `The city ${filler}wakes.`;
+  const shown = `The city ${"and-on-and-on-and-on ".repeat(8)}wakes.`;
+  const board = structuredClone(CHAPTER_BOARD) as typeof CHAPTER_BOARD;
+  board.shots[1].type[0] = { line: 0, mode: "subtitle", text: subtitle, placement: "lower third" };
+  assert.deepEqual(problemsOf(board), [`--board: "s002" type[0] subtitle "${shown}" does not fit two lines at 36 px (16:9)`]);
+  assert.deepEqual(problemsOf(board, { vertical: true }), [`--board: "s002" type[0] subtitle "${shown}" does not fit two lines at 36 px (9:16)`]);
+  // One word to a row: a token wider than the frame at 56 px.
+  const wide = "LIGHTHOUSEKEEPERSDAUGHTERSWEDDINGANNOUNCEMENTSCOLUMNSANDMOREWORDSHEREANDTHERE";
+  const stack = structuredClone(CHAPTER_BOARD) as typeof CHAPTER_BOARD;
+  stack.shots[5].type[0] = { line: 3, mode: "stack", text: `HOLD THE ${wide}`, placement: "left third" };
+  assert.deepEqual(problemsOf(stack), [`--board: "s006" type[0] stack token "${wide}" does not fit one line at 56 px (16:9)`]);
+  // In 9:16 a narrower token already overflows; the short ones are fine.
+  const narrow = "LIGHTHOUSEKEEPERSDAUGHTERSWEDDINGSONGBOOK";
+  stack.shots[5].type[0].text = `HOLD THE ${narrow}`;
+  assert.deepEqual(problemsOf(stack), []);
+  assert.deepEqual(problemsOf(stack, { vertical: true }), [`--board: "s006" type[0] stack token "${narrow}" does not fit one line at 56 px (9:16)`]);
+  stack.shots[5].type[0].text = "HOLD THE LIGHT";
+  assert.deepEqual(problemsOf(stack), []);
+  assert.deepEqual(problemsOf(stack, { vertical: true }), []);
+});
+
 test("9:16: a shot's devices step down together to fit the band above the picture, or are refused", () => {
   const p = plan(CHAPTER_BOARD, { vertical: true });
   assert.equal(p.shots[1].deviceScale, 1); // a label and a counter fit at full size

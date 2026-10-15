@@ -8,7 +8,7 @@
 // No React, no DOM, no node: this file is bundled for the browser and imported by the commands.
 // Nothing here keeps state between calls: no Math.random, no clock, no module-level variable.
 
-import { DEVICE_GAP, MIN_DEVICE_SCALE, deviceHeight, fitFace, geometry } from "./geometry.ts";
+import { DEVICE_GAP, MIN_DEVICE_SCALE, deviceHeight, fitFace, geometry, stackSize } from "./geometry.ts";
 
 export const FILM_FPS = 24;
 export const DITHER_FRAMES = 12; // R4
@@ -374,20 +374,34 @@ export function buildPlan(input: PlanInputs): { plan: Plan | null; problems: str
       const first = Math.min(...tokens.map((t) => t.at));
       blocks.push({ mode, line, text, tokens, from: Math.max(from, frameAt(first)), to, cps: CPS.base, placement });
     });
-    // A card's or a coverline's type must fit the frame at its floor size, so no token the
-    // sidecar lists is ever drawn off the frame.
+    // Every type mode must fit the frame at its floor size, so no token the sidecar lists is
+    // ever drawn off the frame or cropped: a subtitle in its band's lines, a coverline, masthead
+    // or mass in its lines of the frame's width, a stack's every row on one line of it.
+    const where = shape.vertical ? "9:16" : "16:9";
     types.forEach((entry, n) => {
       const mode = str(entry.mode);
-      if (mode !== "coverline" && mode !== "masthead" && mode !== "mass") return;
       // The text drawn: the entry's own, else its line's display text (as the block resolves it).
       const own = str(entry.text) ?? "";
       const lineNo = num(entry.line);
-      const text = plainText(lineNo !== null && own.trim() === "" ? (display[lineNo] ?? "") : own);
-      const size = mode === "coverline" ? shape.sizes.coverline : shape.sizes.masthead;
-      const face = mode === "coverline" ? "text" : "headline";
-      const fit = fitFace(mode === "coverline" ? text : text.toUpperCase(), face, size.min, size.min, shape.text, size.lines);
+      const raw = lineNo !== null && own.trim() === "" ? (display[lineNo] ?? "") : own;
+      const text = plainText(raw);
+      if (mode === "stack") {
+        const all = raw.trim().split(/\s+/).length;
+        parseTokens(raw).forEach((tok, k) => {
+          const { min } = stackSize(shape.vertical, shape.height, all, k);
+          if (fitFace(tok.text.toUpperCase(), "headline", min, min, shape.text, 1).lines > 1) {
+            report(`--board: ${q(id)} type[${n}] stack token ${q(tok.text)} does not fit one line at ${min} px (${where})`);
+          }
+        });
+        return;
+      }
+      if (mode !== "subtitle" && mode !== "coverline" && mode !== "masthead" && mode !== "mass") return;
+      const size = mode === "subtitle" ? shape.sizes.subtitle : mode === "coverline" ? shape.sizes.coverline : shape.sizes.masthead;
+      const face = mode === "subtitle" || mode === "coverline" ? "text" : "headline";
+      const width = mode === "subtitle" ? shape.subtitleBand - 44 : shape.text;
+      const fit = fitFace(face === "text" ? text : text.toUpperCase(), face, size.min, size.min, width, size.lines);
       if (fit.lines > size.lines) {
-        report(`--board: ${q(id)} type[${n}] ${mode} ${q(text)} does not fit ${size.lines === 1 ? "one line" : "two lines"} at ${size.min} px (${shape.vertical ? "9:16" : "16:9"})`);
+        report(`--board: ${q(id)} type[${n}] ${mode} ${q(text)} does not fit ${size.lines === 1 ? "one line" : "two lines"} at ${size.min} px (${where})`);
       }
     });
     const lyric = blocks.filter((b) => b.line !== null).sort((a, b) => a.from - b.from);

@@ -5,10 +5,10 @@ import { Tokens } from "./Tokens.tsx";
 // subtitle: the sung line on an in-scene band, bottom left, in the text face at 44 px (stepped
 // down to 36 to fit two lines), the sung word lit in the accent. The band is sized from the
 // whole line on the block's first frame and does not move or grow as words arrive. 9:16:
-// beneath the picture.
+// beneath the picture. plan.ts refuses a line that takes more than two lines at 36 px.
 export function Subtitle({ block, look }: { block: DrawnBlock; look: FilmLook }) {
   const { margin } = look;
-  const width = look.vertical ? look.width - margin.l - margin.r : Math.round(look.width * 0.58);
+  const width = look.subtitleBand;
   const { max, min, lines } = look.sizes.subtitle;
   const size = look.fit(plainText(block.text), "text", max, min, width - 44, lines);
   const text = (

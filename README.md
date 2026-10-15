@@ -939,9 +939,13 @@ clock, no state kept between frames (the history check proves it).
   word's `t0` at 24 to 40 characters a second, frame by frame, so the line is
   whole six frames before the cut; the rows of a terminal or a spec sheet, and
   every device step, land on the sixteenths. A lyric block runs to the next one
-  (one lyric block a frame). A coverline must fit one line at 56 px (two in
-  9:16) and a masthead two lines at its floor (130 px in 16:9, 97 px in 9:16),
-  or the chapter is refused, so no drawn token is ever off the frame.
+  (one lyric block a frame). Every mode must fit at its floor size, or the
+  chapter is refused, so no token the sidecar lists is ever drawn off the frame
+  or cropped: a subtitle two lines of its band at 36 px (the band 58 percent of
+  the 16:9 frame's width, the text width in 9:16), a coverline one line at
+  56 px (two in 9:16), a masthead or mass two lines at its floor (130 px in
+  16:9, 97 px in 9:16), and every row of a stack one line of the frame's width
+  at its floor (56 px).
 - **Devices, R4's six.** `counter` (counts to `params.to` on the sixteenths,
   at most sixteen steps), `label` (a tag that stamps in: white type on graphite,
   the accent only as the rule down its left edge), `terminal`
@@ -1445,6 +1449,8 @@ and `model depth is not in "/opt/models" (run ...)`.
   `--board: "s002" type[1] shows 3 sung words, line 1 has 4 in words.json`,
   `--board: "s002" type[0] coverline "..." does not fit one line at 56 px (16:9)`,
   `--board: "s006" type[0] masthead "..." does not fit two lines at 97 px (9:16)`,
+  `--board: "s002" type[0] subtitle "..." does not fit two lines at 36 px (16:9)`,
+  `--board: "s006" type[0] stack token "..." does not fit one line at 56 px (16:9)`,
   `--board: "s002" devices need 1216 px above the 9:16 picture, the band has 518 (they would shrink under 60 percent)`
 - `film:reframe`: `--aspect is "4:5", want 9:16`; `film:history`: `--frames is "60", want A,B (two frames of the chapter)`,
   `--frames "60,999": chapter "ch01" has frames 0 to 239`, `--frames "60,60": A and B must differ`,
