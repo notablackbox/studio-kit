@@ -58,8 +58,8 @@ const DEVICE = ["kind", "anchor", "params", "key", "line"];
 const CHAPTER = ["id", "name", "t0", "t1", "sections", "accent", "set", "box"];
 const PLATE = ["plate", "set", "prompt", "aspect", "used_by"];
 
-// A plate key or a clip id names a file (`<plates>/<plate>.png`, `<clips>/<clip>.json`): no
-// separators, no leading dot.
+// A plate key, a clip id or a chapter id names a file (`<plates>/<plate>.png`,
+// `<clips>/<clip>.json`, `<out>/<chapter>.mp4`): no separators, no leading dot.
 export const KEY = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const SHOT_ID = /^s\d{3}$/;
 const HEX = /^#[0-9A-Fa-f]{6}$/;
@@ -145,13 +145,18 @@ export function boardProblems(raw: unknown): string[] {
     });
   }
   if ("chapters" in raw) {
+    const ids = new Set<string>();
     if (!Array.isArray(raw.chapters)) bad("chapters", raw.chapters, "a list");
     else
       raw.chapters.forEach((chapter, n) => {
         const at = `chapters[${n}]`;
         if (!isObject(chapter)) return void problems.push(`${at} is not an object`);
         unknown(at, chapter, CHAPTER);
-        if (typeof chapter.id !== "string" || chapter.id === "") bad(`${at}.id`, chapter.id, "text");
+        // A chapter id names its outputs (<chapter>.mp4, .tokens.json, .audio.json): a plain key,
+        // so it never leaves --out, and used once, so --chapter finds the one it means.
+        if (typeof chapter.id !== "string" || !KEY.test(chapter.id)) bad(`${at}.id`, chapter.id, "a key of letters, digits, dot, dash or underscore");
+        else if (ids.has(chapter.id)) problems.push(`${at}.id ${shown(chapter.id)} is used twice`);
+        else ids.add(chapter.id);
         for (const key of ["t0", "t1"]) if (!isNumber(chapter[key]) || (chapter[key] as number) < 0) bad(`${at}.${key}`, chapter[key], "seconds");
         if (isNumber(chapter.t0) && isNumber(chapter.t1) && !(chapter.t0 < chapter.t1)) problems.push(`${at} ends at ${chapter.t1}, not after its start ${chapter.t0}`);
         for (const key of ["name", "set"]) optString(at, chapter, key);

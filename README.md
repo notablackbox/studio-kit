@@ -602,8 +602,10 @@ OTS; `motion_tier` still, plate3d, motion, sung; a type's `mode` subtitle,
 coverline, masthead, stack, mass; a device's `kind` counter, label, terminal,
 chart, strike, spec-sheet and `key` W, B, H, F, T; `treatment` push, drift,
 parallax-left, parallax-right, rise, settle or null; `transition_in` cut or
-dither); a plate key or clip id that is not letters, digits, `.`, `-` and `_`
-(it names a file). A missing framing, a TODO or an empty field is not a schema
+dither); a plate key, clip id or chapter id that is not letters, digits, `.`,
+`-` and `_` (it names a file: a chapter id names `<chapter>.mp4` and its
+sidecars in `--out`, so `../master` is refused before any path is touched); a
+chapter id used twice (`chapters[1].id "ch01" is used twice`). A missing framing, a TODO or an empty field is not a schema
 problem: the audit's `todo` gate reports it.
 
 `film:audit` runs every gate of the storyboard wiki's audit, and the kit's
@@ -1406,6 +1408,9 @@ and `model depth is not in "/opt/models" (run ...)`.
   `--plates is not a folder` (`--clips`, `--footage`, `--brand`), `--brand is not a brand folder with palette.json`,
   `--brand: fonts/Anton-Regular.ttf is missing`, `--brand: palette.json has no accent or productGreen colour`
 - `--chapter: the board has no chapter "ch09"`
+- the board's schema problems, as in [The board](#the-board-filmaudit-filmsheet-filmdepth-filmedl), among them
+  `--board: chapters[0].id is "../master", want a key of letters, digits, dot, dash or underscore` and
+  `--board: chapters[1].id "ch01" is used twice`, before any path is built or removed
 - `--range is "soon", want t0:t1 in song seconds (t0 before t1)`, `--range "9:12" is not inside chapter "ch01" (0 to 10 s)`
 - `--no-ramp is for the kit's tests only (FILM_TEST=1)`
 - `--edl: "s003" has no entry`, `--edl: "s002" names take "W01", which is not <clip>-t<n>`,

@@ -511,6 +511,9 @@ test("a malformed board is refused: exit 2, one line per problem, nothing writte
     [(_b, s) => (s[4].treatment = "zoom"), ['--board: shots[4].treatment is "zoom", want one of push, drift, parallax-left, parallax-right, rise, settle, or null']],
     [(_b, s) => (s[4].plate = "../p-roof"), ['--board: shots[4].plate is "../p-roof", want a key of letters, digits, dot, dash or underscore, or null']],
     [(b) => ((b.chapters as Record<string, unknown>[])[0].box = 7), ["--board: chapters[0].box is 7, want a short text (at most 60 characters)"]],
+    // A chapter id names files (<chapter>.mp4): a plain key, used once.
+    [(b) => ((b.chapters as Record<string, unknown>[])[0].id = "../master"), ['--board: chapters[0].id is "../master", want a key of letters, digits, dot, dash or underscore']],
+    [(b) => ((b.chapters as Record<string, unknown>[])[1].id = "ch01"), ['--board: chapters[1].id "ch01" is used twice']],
     [(b) => (b.version = 2), ["--board: version is 2, want 1"]],
   ];
   cases.forEach(([change, want], n) => {

@@ -158,6 +158,15 @@ test("refusals before any work: flags, chapter, range, a missing take, footage o
   const typed = structuredClone(CHAPTER_BOARD);
   typed.shots[1].type[1].text = "We count windows.";
   writeFileSync(join(p.dir, "board", "typed.json"), JSON.stringify(typed));
+  // A chapter id names the outputs (<chapter>.mp4): one that is not a plain key, or one used
+  // twice, is refused at the board. The sentinel sits where "../master" would write.
+  const escape = structuredClone(CHAPTER_BOARD);
+  escape.chapters[0].id = "../master";
+  writeFileSync(join(p.dir, "board", "escape.json"), JSON.stringify(escape));
+  const twice = structuredClone(CHAPTER_BOARD);
+  twice.chapters[1].id = "ch01";
+  writeFileSync(join(p.dir, "board", "twice.json"), JSON.stringify(twice));
+  writeFileSync(join(p.dir, "master.mp4"), "sentinel");
   const swap = (args: string[], flag: string, value: string) => args.map((a, k) => (args[k - 1] === flag ? value : a));
   const base = p.args("x");
   const cases: [string[], string[]][] = [
@@ -173,6 +182,8 @@ test("refusals before any work: flags, chapter, range, a missing take, footage o
     [swap(base, "--board", "board/control.json"), [`--board: "s002" type[0] coverline "${long.replace("EVERY-", "EVERY\\u0085")}" does not fit one line at 56 px (16:9)`]],
     [swap(base, "--plates", "bare-plates"), ['--plates: "s005" is plate3d and plate "p-roof" has no near, mid and far mattes']],
     [swap(base, "--board", "board/typed.json"), ['--board: "s002" type[1] shows 3 sung words, line 1 has 4 in words.json']],
+    [swap(swap(base, "--board", "board/escape.json"), "--chapter", "../master"), ['--board: chapters[0].id is "../master", want a key of letters, digits, dot, dash or underscore']],
+    [swap(base, "--board", "board/twice.json"), ['--board: chapters[1].id "ch01" is used twice']],
   ];
   for (const [args, want] of cases) {
     const result = film("chapter", p.dir, args);
@@ -181,6 +192,7 @@ test("refusals before any work: flags, chapter, range, a missing take, footage o
     assert.equal(result.stderr, "");
   }
   assert.equal(existsSync(join(p.dir, "x")), false);
+  assert.equal(readFileSync(join(p.dir, "master.mp4"), "utf8"), "sentinel");
 });
 
 test("a render that cannot be written exits 1 with one line on stderr", () => {
