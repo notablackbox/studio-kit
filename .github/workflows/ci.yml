@@ -34,6 +34,8 @@ jobs:
           key: models-${{ hashFiles('src/film/py/requirements.txt', 'src/film/py/film_py/models.py') }}
       - if: steps.models.outputs.cache-hit != 'true'
         run: python3 -I src/film/py/film_py/models.py --dest /opt/models
+      # film:mix's four sounds, synthesised at build (never committed); the tests make their own.
+      - run: python3 -I src/film/py/film_py/sounds.py --dest /opt/sounds
       - run: npm ci
       - run: npx remotion browser ensure
       - run: npm test

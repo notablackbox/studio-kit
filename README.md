@@ -71,6 +71,14 @@ npm --prefix /opt/studio run film:request -- --clip <clips/W01.json> --provider 
 npm --prefix /opt/studio run film:request -- --image <slot.json> --provider openrouter --ledger <ledger.jsonl> --out <dir> [--rate-per-image X]
 npm --prefix /opt/studio run film:ledger -- --ledger <ledger.jsonl> --out <dir> --asked <request.json> | --polled <key> | --delivered <key> --file <path> | --declined <key> | --failed <key> | --check <reference> [--figures <json>] [--reason <text>]
 npm --prefix /opt/studio run film:sync -- --take <take.mp4> --window <window.wav> --beats <beats.json> --song-t0 <s> --out <dir>
+npm --prefix /opt/studio run film:chapter -- --board <shots.json> --edl <edl.json> --words <words.json> --beats <beats.json> --hits <hits.json> --display <display.txt> --plates <dir> --clips <dir> [--footage <dir>] [--brand <dir>] --chapter <id> --out <dir> [--range t0:t1] [--vertical]
+npm --prefix /opt/studio run film:gate -- --tokens <chapter.tokens.json> --words <words.json> --display <display.txt> --out <dir>
+npm --prefix /opt/studio run film:history -- <film:chapter's flags, no --range> --frames A,B
+npm --prefix /opt/studio run film:flash -- --video <mp4> --out <dir>
+npm --prefix /opt/studio run film:mix -- --master <song.wav> --events <ch01.audio.json> [<ch02.audio.json> ...] --vocals <vocals.wav> --sounds <dir> --out <dir>
+npm --prefix /opt/studio run film:encode -- --chapters <ch01.mp4> [<ch02.mp4> ...] --mix <mix.wav> --out <dir>
+npm --prefix /opt/studio run film:reframe -- <film:chapter's flags> [--aspect 9:16]
+npm --prefix /opt/studio run film:captions -- --words <words.json> --display <display.txt> --out <dir> [--video <mp4>] [--brand <dir>]
 ```
 
 ## `changelog`
@@ -787,6 +795,154 @@ beside them, and the window `film:window` cuts from the test song, with takes
 made from it: the window itself, as a WAV and inside an MP4, 0.3 s late, 0.3 s
 early, cut short at 3 s, with white noise after 2 s, and noise alone.
 
+### Rendering: `film:chapter`, `film:gate`, `film:history`, `film:flash`, `film:mix`, `film:encode`, `film:reframe`, `film:captions`
+
+The chapter engine is the kit's Remotion stack (spec D7, toolkit item 18), in
+`src/remotion/film/`, beside the Teaser. `FilmChapter` (1920x1080, 24 fps) and
+`FilmChapterVertical` (1080x1920) draw one chapter of the film; their props are
+the chapter id and the paths `film:chapter` resolved (the board, the edit list,
+`words.json`, `beats.json`, `hits.json`, `display.txt`, the plates, clips and
+footage folders, and the brand). A browser cannot read those paths, so
+`film:chapter` stages what the chapter needs in the render's public folder in
+temp, and `calculateMetadata` reads it there, builds the plan once and takes
+the chapter's length from its `t0` and `t1`.
+
+One function draws: `plan.ts` builds a plain JSON plan from the inputs, and
+`frameState(plan, frame)` says what a frame shows. The composition draws exactly
+that, and `film:chapter` runs the same function in Node for the tokens sidecar
+and the sound events, so the sidecar and the pixels cannot disagree. Every frame
+is a pure function of the frame number and the props: no `Math.random`, no
+clock, no state kept between frames (the history check proves it).
+
+- **Time.** Frame F shows song time F / 24. A thing timed at t shows from the
+  first frame at or after t (a cut, a word, a device's key); a chapter covers the
+  frames from its `t0` to its `t1`, so chapters tile the song's frames.
+- **Pictures, from the edit list.** `segs` play the take named by the take id
+  (`W01-t2` plays `<clips>/W01/take-2.mp4`) at clip time `in + (t - t0)`,
+  holding its last frame past its end; `plate` draws the plate still, or, for a
+  `plate3d` shot, R3's three layers: the plate (far), the plate cut by its mid
+  matte and by its near matte (`<plates>/<plate>.near.png`, `.mid.png`,
+  `.far.png`, as `film:depth` writes them), moved by the shot's treatment
+  (`push`, `drift`, `parallax-left`, `parallax-right`, `rise`, `settle`; 4
+  percent at the near layer, 2 at mid, 1 at far, eased over the shot, a pure
+  function of song time, every layer with a 6 percent overscan); `footage`
+  plays `<footage>/<file>` from its first frame (a file outside the footage
+  folder is refused); `design` is the brand's black.
+- **Type, R4's five modes.** `subtitle` (the text face at 44 px, stepped down to
+  36 to fit two lines, bottom left on a band, the sung word lit in the accent),
+  `coverline` (one large line hung from the left axis), `masthead` (a
+  full-frame card, white on black, the headline face at 12 to 16 percent of the
+  frame's height), `stack` (a word to a row, the last the biggest and lowest)
+  and `mass` (a wall of the word in the mono face in graphite, the line drawn
+  over it). A `type[]` entry's `text` uses the display grammar (`TEXT|n` shows
+  TEXT for n sung words, `|0` rides on the next token, `*x*` accent, `~x~`
+  strike, `_x_` mono) and must consume exactly its line's words in
+  `words.json`. Each token appears on its word's start, never before it; a line
+  carried across a cut shows its earlier words at the cut; a subtitle or
+  coverline types in at 24 characters a second (raised up to 40 so the line is
+  whole six frames before the cut); a lyric block runs to the next one (one
+  lyric block a frame).
+- **Devices, R4's six.** `counter` (counts to `params.to` on the sixteenths,
+  at most sixteen steps), `label` (a tag that stamps in), `terminal`
+  (`params.lines`, one a sixteenth), `chart` (`params.series` as a line, or
+  bars with `style: "bar"`, a point a sixteenth; a series given by name draws a
+  plain rise under that name), `strike` (`params.text`, else its line's type
+  text, struck over two sixteenths) and `spec-sheet` (`params.title` and
+  `params.rows`, a row a sixteenth). A device enters on its key: `W` its line's
+  first word, `B` the next beat, `H` the next hit of `hits.json` (else the next
+  kick or snare), `F` the song frame `params.at`, `T` the song time
+  `params.at`, and runs to the shot's end. The sixteenths are the beat map's
+  beats, eighths and the eighths' midpoints. Anchors are a slot (`left`,
+  `right`, `top`, `top-left`, `top-right`, `bottom`, `bottom-left`,
+  `bottom-right`, `centre`; the slots share a left and a right column, where
+  devices stack in board order) or `{x, y}` in percent.
+- **Colour.** Colours come from the brand's `palette.json` only: `black`,
+  `warmWhite`, `graphite`, `silver`, and the accent (`accent`, else
+  `productGreen`). A board's accent is used when the palette lists it. The
+  accent goes to at most two elements a frame, in drawing order (type, then
+  devices); later ones fall back to silver.
+- **Chrome.** A corner HUD in the mono face, top right: `SESSION mm:ss`,
+  `BAR n`, `BEAT n` from the beat map; hidden under a full-frame card and on a
+  shot whose `chrome` is `"off"`.
+- **Transitions.** `cut`, and `dither`: twelve frames in which the incoming
+  picture shows through an 8x8 ordered-dither clip of 24 px cells over the
+  outgoing shot still playing; each cell switches once.
+- **Flash safety by construction.** A full-frame card (a design shot, a
+  masthead or mass block) ramps its black over three frames before it and three
+  after it. `--no-ramp` (test only) switches cards in one frame, so a board can
+  be made to fail the flash check.
+
+`film:chapter` renders `<chapter>.mp4` (or `<chapter>.9x16.mp4` with
+`--vertical`) with `npx remotion render` (h264, BT.709, the kit's frame cache
+cap and family-kill runner, a 15-minute limit); `--range t0:t1` (song seconds,
+inside the chapter) renders part of it. It writes `<chapter>.tokens.json`, the
+lyric gate's sidecar (R1: `{fps: 24, chapter, frames: [{t, tokens: [{word, text}]}]}`,
+one entry per frame rendered, `t` its song time) and `<chapter>.audio.json`, the
+sound events (`[{t, kind, gain, shot, what}]`: a device's entrance is a `tick`,
+`stamp` or `type`, a dither a `whoosh`), and `chapter-report.json` with
+ffprobe's duration, size, size in pixels, rate and colour tags:
+`chapter: "ch01" 240 frames (10.000 s, 1920x1080, 24 fps, 2400395 bytes), 12 sung words drawn, 3 sound events`.
+Everything the chapter needs is checked before any work (exit 2). On the test
+chapter a ten-second render takes about 10 s on 4 CPUs.
+
+`film:gate` (toolkit item 19) reads the sidecar: every sung word whose start
+falls in the sidecar's span must be listed on the frame holding its start, or
+one frame either side. It prints `gate: 12/12`; exit 3 adds one line per word,
+`gate: word 6 "windows" at 4.730 s (frame 113) is not drawn`. The display text
+must consume each line's words exactly (exit 2 otherwise).
+
+`film:history` (toolkit item 20) renders frame B alone with
+`npx remotion still`, then `FilmHistory` renders frame A and then frame B in one
+page (one tab, in order), and compares the two B frames as raw RGB. Any channel
+more than 40 levels apart fails (exit 3,
+`history: frame 60 differs by 238 levels at 322,595 after frame 190 (...)`);
+otherwise it prints `HISTORY-INDEPENDENT`. It keeps both PNGs in `--out`.
+
+`film:flash` (toolkit item 21) decodes the video at 96x54 and 24 fps and asks
+`film_py.flash`: linear relative luminance per pixel; a transition is a run of
+the frame's mean one way by 0.1 or more, the darker end under 0.8, a quarter of
+the pixels moving 0.1 the same way; a flash is a pair of opposing transitions
+(pairs, not transitions); more than three in any one-second window fails, and
+so does any single-frame pop (a frame 0.03 off both neighbours the same way).
+Exit 3 prints one line per failing stretch or pop; the report lists every
+transition, flash, window and pop and the mean luminance per frame.
+
+`film:mix` places each event's sound (`<sounds>/<kind>.wav`) at its time and
+gain, ducks the events under the vocal stem with `sidechaincompress`, adds the
+master, and brings the mix to the master's own integrated loudness, measured
+with `ebur128`; it writes `mix.wav` (48 kHz, 24-bit, stereo) and fails (exit 3)
+if the mix lands more than 1 LU from the master. An event outside the master is
+refused. The four sounds are synthesised, never committed:
+`python3 -I src/film/py/film_py/sounds.py --dest <dir>` writes `tick.wav`,
+`stamp.wav`, `type.wav` and `whoosh.wav` (48 kHz 24-bit, a fixed seed); the
+image build runs it beside `models.py`.
+
+`film:encode` concatenates the chapters (ffmpeg's concat demuxer, in the order
+given), muxes the mix (AAC 256k) and writes `master.mp4` (libx264 CRF 16,
+preset slow, yuv420p, converted to and tagged BT.709 primaries, transfer and
+matrix) and `review.mp4` (CRF 20, `-maxrate 8M -bufsize 16M`). Both are read
+back with ffprobe: the duration within 0.5 s of the chapters' sum, the three
+tags, 24 fps, h264 and AAC, or exit 1.
+
+`film:reframe` is `film:chapter --vertical` with `--aspect 9:16`: the same
+timeline at 1080x1920, the picture across the frame's width on the brand's
+black, the devices stacked above it, the type re-flowed beneath it at the
+master's pixel sizes (stepped down to a floor to fit two lines), full-frame
+cards full-frame. Its own sidecar, `<chapter>.9x16.tokens.json`, goes to
+`film:gate` like the master's.
+
+`film:captions` writes `captions.srt`, one cue per display line (the markers
+and counts stripped), from the line's first word's start to its last word's
+end, and with `--video` burns it in with ffmpeg's `subtitles` filter in Inter
+(`captioned.mp4`).
+
+The tests build a project from the board fixture's analysis: a ten-second
+chapter (a still plate, a sung shot on a fake take made with ffmpeg's
+`testsrc2`, a line carried across a cut onto a still, SMPTE-bar footage, a
+`push` 2.5D shot entering on a dither, a design shot with a masthead, a label
+and a counter, the chrome), its edit list made by `film:edl`, and painted
+plates and mattes.
+
 ### The test song
 
 `python3 -I tests/fixtures/synth_song.py --out <dir>` builds the song every
@@ -1019,11 +1175,60 @@ and `model depth is not in "/opt/models" (run ...)`.
 - `--take has no audio stream`, `--window cannot be read as audio`, `--beats is not a beats.json`,
   `--song-t0 is "soon", want seconds from 0`
 
+`film:chapter` and `film:reframe` (and `film:history`, with `--frames`):
+
+- `film:chapter: --board, --edl, --words, --beats, --hits, --display, --plates, --clips, --chapter, --out are required (missing ...)`
+- `--edl is not an edl.json`, `--words is not a words.json`, `--beats is not a beats.json`, `--hits is not a hits.json`,
+  `--plates is not a folder` (`--clips`, `--footage`, `--brand`), `--brand is not a brand folder with palette.json`,
+  `--brand: fonts/Anton-Regular.ttf is missing`, `--brand: palette.json has no accent or productGreen colour`
+- `--chapter: the board has no chapter "ch09"`
+- `--range is "soon", want t0:t1 in song seconds (t0 before t1)`, `--range "9:12" is not inside chapter "ch01" (0 to 10 s)`
+- `--edl: "s003" has no entry`, `--edl: "s002" names take "W01", which is not <clip>-t<n>`
+- `--clips: "s002" plays take "W01-t2", which is not in the clips folder`,
+  `--plates: "s001" plays plate "p-dawn", which is not in the plates folder`,
+  `--plates: "s005" is plate3d and plate "p-roof" has no near, mid and far mattes`,
+  `--footage: "s004" plays footage "shot-01.mp4" and no --footage folder was given`,
+  `--footage: "s004" footage "../board/shots.json" is outside the footage folder`
+- `--board: "s005" is plate3d and needs a treatment (one of push, drift, parallax-left, parallax-right, rise, settle)`,
+  `--board: "s002" type[1] shows 3 sung words, line 1 has 4 in words.json`
+- `film:reframe`: `--aspect is "4:5", want 9:16`; `film:history`: `--frames is "60", want A,B (two frames of the chapter)`,
+  `--frames "60,999": chapter "ch01" has frames 0 to 239`, `--frames "60,60": A and B must differ`,
+  `film:history: --range is not used here; name the two frames with --frames A,B`
+
+`film:gate`: `film:gate: --tokens, --words, --display and --out are required`,
+`--tokens is not a tokens sidecar ({fps: 24, frames: [{t, tokens: [{word, text}]}]})`,
+`--words is not a words.json`, `--display has 3 lyric lines, words.json has 4`,
+`--display line 1 ("We count|2 the windows.") shows 5 sung words, words.json has 4`.
+
+`film:flash`: `film:flash: --video and --out are required`, `--video cannot be read as a video`.
+
+`film:mix`:
+
+- `film:mix: --master, --events, --vocals, --sounds and --out are required`
+- `--master cannot be read as audio` (`--vocals`), `--sounds is not a folder`,
+  `--sounds has no tick.wav (make them with python3 -I src/film/py/film_py/sounds.py --dest <folder>)`
+- `--events: "ch01.audio.json"[0] at 20.000 s is outside the master (12.000 s)`,
+  `--events: "ch01.audio.json"[1] kind "boom" is not one of tick, stamp, type, whoosh`,
+  `... has no time (t, in song seconds)`, `... gain 2.5 is not 0 to 2`, `--events: "x.json" is not a list of events`
+
+`film:encode`: `film:encode: --chapters <mp4>..., --mix and --out are required`,
+`--chapters: "ch02.mp4" cannot be read as a video`, `--chapters: "wide.mp4" measures 320x180, the first 640x360`,
+`--chapters: "ch02.mp4" runs at 30 fps, want 24`, `--mix cannot be read as audio`.
+
+`film:captions`: `film:captions: --words, --display and --out are required`,
+`--words is not a words.json`, `--display has 1 lyric line, words.json has 4`,
+`--display line 1 (...) shows 5 sung words, words.json has 4`, `--video cannot be read as a video`,
+`--brand has no fonts folder`.
+
 Exit `3`, with the report written: `film:words`, the check's line and the words
 off, as in [Listening](#listening-filmstems-filmbeats-filmwords-filmhits-filmwindow),
 with `words.json` written too; `film:audit`, one `gate <name>: ...` line per
 failing gate; `film:edl`, one `edl: "s004" has neither a take nor a plate (clip "W09" has no delivered take)` line
-per shot, and no `edl.json`; `film:sync`, `sync: "take-2.mp4" does not copy the window (NCC 0.04, want over 0.2)`.
+per shot, and no `edl.json`; `film:sync`, `sync: "take-2.mp4" does not copy the window (NCC 0.04, want over 0.2)`;
+`film:gate`, `gate: 10/12` and a line per word not drawn; `film:history`, the differing pixel; `film:flash`,
+`flash: 4 flashes in one second between 0.042 and 2.000 s, want at most 3` or
+`flash: a single-frame pop at 0.500 s (frame 12): mean luminance 0.127 -> 0.165 -> 0.127`; `film:mix`,
+`mix: -20.1 LUFS, the master -18.3 LUFS (-1.8 LU off, want within 1)`.
 
 Exit `1`, on stderr: `walk: the session file could not be removed`,
 `walk: unexpected failure`, `render: unexpected failure` (the report could not
@@ -1042,7 +1247,12 @@ name, or a write that failed). `film:sheet`
 prints `film:sheet: the browser could not be started`,
 `film:sheet: the browser could not print the sheet`,
 `film:sheet: the browser took longer than 2 minutes` or
-`film:sheet: the sheet printed on N pages, not M`.
+`film:sheet: the sheet printed on N pages, not M`. The rendering commands print
+`film:chapter: rendering FilmChapter failed` (Remotion's own tail on stderr
+under `FILM_DEBUG=1`), `film:chapter: ch01.mp4 measures WxH, want 1920x1080`,
+`film:history: FilmHistory rendered N frames, want 2`, `film:encode: master.mp4 runs 3.1 s, the chapters 3.5 s; ...`
+(an encode that does not measure up), `film:<name>: ffmpeg took longer than 5 minutes`, and
+`film:<name>: npx could not be started`.
 
 ## Brand sources
 
