@@ -1,0 +1,11 @@
+{"id": "W02", "shot": "s004", "kind": "sung", "status": "delivered",
+ "provider": "higgsfield", "model": "bytedance/seedance-2.5",
+ "start": "plates/p-roof.png",
+ "song_t0": 6.462, "needed": [6.96, 10.08], "words": "hold on hold the light",
+ "window": {"t0": 6.462, "t1": 10.883, "mode": "clean", "file": "audio/windows/W02.wav"},
+ "body": {"prompt": "medium close-up, she sings the chorus to the lens", "duration": 5, "resolution": "720p", "aspect_ratio": "16:9"},
+ "takes": [
+   {"n": 1, "provider": "higgsfield", "status": "delivered", "file": "clips/W02/take-1.mp4"}
+ ],
+ "covers": [],
+ "parent": null}

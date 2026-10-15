@@ -1,0 +1,10 @@
+{
+  "date": "2026-10-15",
+  "synthetic": true,
+  "shots": [
+    {"n": 1, "surface": "dashboard", "route": "/", "ok": true, "file": "shot-01.webm", "seconds": 6, "status": "recorded", "error": "", "usedFallback": false},
+    {"n": 2, "surface": "jobs", "route": "/jobs", "ok": false, "file": "", "seconds": 0, "status": "failed", "error": "settle timed out", "usedFallback": false}
+  ],
+  "recorded": 1,
+  "failed": 1
+}

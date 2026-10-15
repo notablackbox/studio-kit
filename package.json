@@ -16,6 +16,10 @@
     "film:words": "tsx src/film/words.ts",
     "film:hits": "tsx src/film/hits.ts",
     "film:window": "tsx src/film/window.ts",
+    "film:audit": "tsx src/film/audit.ts",
+    "film:sheet": "tsx src/film/sheet.ts",
+    "film:depth": "tsx src/film/depth.ts",
+    "film:edl": "tsx src/film/edl.ts",
     "test": "node --import tsx --test tests/*.test.ts"
   },
   "dependencies": {
