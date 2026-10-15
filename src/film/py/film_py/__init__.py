@@ -74,7 +74,11 @@ def model(key: str) -> Path:
 
 
 def spec(argv) -> dict:
-    """The JSON spec a listening module works from: the one argument, else stdin."""
+    """The JSON spec a listening module works from: its one argument.
+
+    The kit's runner always passes the spec as the argument (it gives the child no stdin); stdin
+    is read only when there is no argument, for running a module by hand.
+    """
     try:
         text = argv[0] if argv else sys.stdin.read()
         value = json.loads(text)

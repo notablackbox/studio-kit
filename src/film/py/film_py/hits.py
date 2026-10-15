@@ -1,12 +1,14 @@
 """The hit list behind film:hits (claudia.gallery's toolkit wiki, item 7; formats: hits.json).
 
-    python3 -I -m film_py.hits '<spec>'      (or the spec on stdin)
+    python3 -I -m film_py.hits '<spec>'
 
-The spec: {"stems": folder, "mix": path, "beats": null | path}. The folder holds drums.wav
+The spec is the one argument, JSON (stdin is read only when there is none, which the kit's
+runner never does): {"stems": folder, "mix": path, "beats": null | path}. The folder holds drums.wav
 and vocals.wav, and bass.wav and other.wav when film:stems wrote them.
 
 - kick: onsets of the drum stem at 30 to 150 Hz; snare: at 150 Hz to 5 kHz; hat: at 6 to
-  16 kHz. A snare or hat onset within 45 ms of a kick is the kick's click, and dropped.
+  16 kHz. A snare or hat onset within 45 ms of a kick is the kick's click, and dropped; a hat
+  onset within 45 ms of a snare is the snare's noise in the top band, and dropped too.
 - hits: the impact score per 10 ms frame, the jump of the next 0.6 s over the previous 1.5 s
   of each envelope (0 to 1), as max(mix, 0.9 x drums, 0.7 x bass); its peaks at 0.22 or more,
   snapped to the nearest drum onset within 0.65 s, merged within 2 s (the stronger kept).
@@ -44,10 +46,11 @@ def bands(drums, rate):
     snare, _ = audio.onsets(drums, rate, 150, 5000)
     hat, _ = audio.onsets(drums, rate, 6000, 16000)
 
-    def no_click(times):
-        return np.array([t for t in times if audio.near(kick, t, KICK_CLICK) is None])
+    def apart(times, louder):
+        return np.array([t for t in times if audio.near(louder, t, KICK_CLICK) is None])
 
-    return kick, no_click(snare), no_click(hat)
+    snare = apart(snare, kick)
+    return kick, snare, apart(apart(hat, kick), snare)
 
 
 def scaled_envelope(x, rate):

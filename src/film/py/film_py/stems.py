@@ -1,8 +1,9 @@
 """The four stems behind film:stems (claudia.gallery's toolkit wiki, item 4).
 
-    python3 -I -m film_py.stems '<spec>'      (or the spec on stdin)
+    python3 -I -m film_py.stems '<spec>'
 
-The spec: {"in": path, "dest": folder}. demucs htdemucs on the CPU, all four sources (never
+The spec is the one argument, JSON (stdin is read only when there is none, which the kit's
+runner never does): {"in": path, "dest": folder}. demucs htdemucs on the CPU, all four sources (never
 two-stem mode): vocals, drums, bass and other, each written to `dest` as a 16-bit WAV at the
 model's rate (44.1 kHz) and the input's channel count (mono is separated as stereo and folded
 back). `dest` is a temporary folder the Node side made; it moves the stems into --out.

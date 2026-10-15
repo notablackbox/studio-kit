@@ -406,8 +406,10 @@ window 1 to 2 s each.
 
 `film:stems --in <song.wav> --out <dir>`: demucs `htdemucs` on the CPU, all four
 sources, never two-stem mode. Writes `<dir>/stems/vocals.wav`, `drums.wav`,
-`bass.wav` and `other.wav` (16-bit, 44.1 kHz, the input's channels), each moved
-in from the temp folder only once all four exist. `stems-report.json` records
+`bass.wav` and `other.wav` (16-bit, 44.1 kHz, the input's channels) as one unit:
+the four are written into a fresh staging folder in `--out` and renamed into place as
+`stems/`, an earlier `stems/` (or a link there) renamed aside first and then removed,
+so a failed run leaves none of its stems and never mixes old and new. `stems-report.json` records
 the model, the seconds taken and any samples clipped. The vocal stem feeds
 `film:words` and `film:window`, the drum stem `film:beats` and `film:hits`, bass
 and other the impacts and risers.
@@ -425,10 +427,15 @@ most 30 to 150 Hz onset energy; a block whose two best phases are within
 first kick decides (`downbeat_method: "kick"`). `--downbeat-phase N` (0 to 3, the
 index in `beats` of the first downbeat) sets them by hand (`"manual"`).
 `tempo` is `[{t, bpm}]`, one per window. Sections: with `--lyrics`, one per
-`[tag]` of the sheet (`source: "lyrics-tag"`): with `--words` too, each starts
-on the downbeat its first word belongs to (a word under 0.8 s before a downbeat
-is its pickup), else the bars are shared evenly in the tags' order. Without a
-sheet, one section (`"heuristic"`). Each section has `t0`, `t1`, `bar0`, `bar1`
+`[tag]` of the sheet. With `--words` too, each starts on the downbeat its first
+word belongs to (a word under 0.8 s before a downbeat is its pickup) and is
+`source: "lyrics-tag"` (the first starts at 0); without words the bars are
+shared evenly in the tags' order, named by the tags but `"heuristic"`. A tag
+with no lyric line of its own is merged into the next tag (the last ones into
+the one before), and a tag that would start on the same downbeat as the one
+before is merged into it, each with a line in `section_notes` of the report
+(`[Intro] has no lyric line of its own: merged into Verse`), so no section is
+ever empty. Without a sheet, one section (`"heuristic"`). Each section has `t0`, `t1`, `bar0`, `bar1`
 and an `energy` (the drums' RMS against the loudest second, 0 to 1).
 
 `film:words --vocals <vocals.wav> --lyrics <lyrics.txt> --out <dir>`: a time for
@@ -440,16 +447,18 @@ context). Each word's edges are then moved to the stem's energy: out from its
 loudest frame through frames at 5 percent of that peak, bridging closures under
 80 ms, never into the next word, at most 0.25 s from where the aligner put it
 (the aligner lets a last consonant run on into silence). A word whose `conf` is
-under `--min-conf` (default 0.5) falls back, as the wiki merges them: to
+under `--min-conf` (default 0.5; it tunes the fallback only, never the gate) falls back, as the wiki merges them: to
 faster-whisper `tiny`'s word with the same text heard between its placed
 neighbours (`src: "whisper"`, its edges refined the same way), else to an even
 share of the gap between two placed words of its line (`"interp"`), else it
 keeps the aligner's time. `words.json` holds `words` (`i`, `w`, `line`, `t0`,
 `t1`, `conf`, `src`), `lines` (`line`, `text`, `t0`, `t1`) and `gaps` (2 s or
-more between words, and before the first or after the last, with `after_word`).
+more between two words, or after the last word to the end, each with the index
+of the word it follows in `after_word`; the silence before the first word is not a gap).
 The check: with `--expect` (a `words.json`, or the test song's `truth.json`), at
 least 90 percent of the words must start and end within 0.10 s of the expected
-times; without it, at least 90 percent must have a `conf` of `--min-conf` or more.
+times; without it, at least 90 percent must have a `conf` of 0.5 or more (fixed:
+`--min-conf 0` cannot pass a weak alignment).
 Otherwise exit `3`, `words.json` and the report still written, and one line per
 failure: `words: 8 of 12 within 0.10 s of the expected times, want at least 90 percent`
 (or `words: 5 of 12 with confidence 0.5 or more, want at least 90 percent`),
@@ -466,7 +475,8 @@ exactly its lyric line's words (`TEXT|n` shows TEXT over n words, n defaults to
 
 `film:hits --stems <dir> --mix <song.wav> --out <dir>`: `kick` (drum-stem onsets
 at 30 to 150 Hz), `snare` (150 Hz to 5 kHz) and `hat` (6 to 16 kHz), a snare or
-hat onset within 45 ms of a kick dropped as the kick's click. An onset is timed
+hat onset within 45 ms of a kick dropped as the kick's click, and a hat onset within
+45 ms of a snare dropped as the snare's noise in the top band. An onset is timed
 where the band's envelope crosses a quarter of its rise. `hits`: the impact
 score per 10 ms, the jump of the next 0.6 s over the previous 1.5 s of each
 envelope as `max(mix, 0.9 drums, 0.7 bass)`, its peaks at 0.22 or more snapped

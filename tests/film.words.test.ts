@@ -1,5 +1,6 @@
 import { before, test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { film, lines, song, tempDir, type Truth } from "./fixtures/film.ts";
@@ -9,7 +10,7 @@ import { film, lines, song, tempDir, type Truth } from "./fixtures/film.ts";
 type Words = {
   words: { i: number; w: string; line: number; t0: number; t1: number; conf: number; src: string }[];
   lines: { line: number; text: string; t0: number; t1: number }[];
-  gaps: { t0: number; t1: number; after_word: number | null }[];
+  gaps: { t0: number; t1: number; after_word: number }[];
 };
 
 let dir = "";
@@ -46,7 +47,13 @@ test("at least 90 percent of words within 0.10 s of their true span, checked aga
     assert.equal(l.t1, own.at(-1)!.t1);
   }
   assert.ok(Array.isArray(timed.gaps));
-  for (const g of timed.gaps) assert.ok(g.t1 - g.t0 >= 2);
+  for (const g of timed.gaps) {
+    assert.ok(g.t1 - g.t0 >= 2);
+    assert.ok(Number.isInteger(g.after_word), `after_word is a word index: ${JSON.stringify(g)}`);
+  }
+  // The fixture's last word ends 1.9 s before the end: no gap. A long silence after it would be
+  // one, after the last word; the silence before the first word is never a gap.
+  assert.ok(timed.gaps.every((g) => g.after_word >= 0 && g.after_word < timed.words.length));
 
   const report = JSON.parse(readFileSync(join(dir, "a", "words-report.json"), "utf8"));
   assert.equal(report.ok, true);
@@ -65,21 +72,33 @@ test("at least 90 percent of words within 0.10 s of their true span, checked aga
   assert.match(lines(result.stdout)[0], /^words: 12 words in 4 lines \(\d+ w2v, \d+ whisper, \d+ interp\), \d+ of 12 within 0\.10 s of the expected times$/);
 });
 
-test("without --expect the check is the aligner's own confidence", () => {
-  const result = film("words", dir, ["--vocals", "vocals.wav", "--lyrics", "lyrics.txt", "--out", "b"]);
+test("without --expect the check is the aligner's own confidence; the silence before the first word is no gap", () => {
+  // The vocal stem with 2.5 s of silence put in front: the first word starts past 3 s.
+  const padded = spawnSync("ffmpeg", ["-v", "error", "-nostdin", "-y", "-i", "vocals.wav", "-af", "adelay=2500|2500", "late.wav"], { cwd: dir, encoding: "utf8" });
+  assert.equal(padded.status, 0, padded.stderr);
+  const result = film("words", dir, ["--vocals", "late.wav", "--lyrics", "lyrics.txt", "--out", "b"]);
   assert.equal(result.status, 0, result.stdout + result.stderr);
   const report = JSON.parse(readFileSync(join(dir, "b", "words-report.json"), "utf8"));
   assert.equal(report.check.by, "conf");
+  assert.equal(report.check.gate, 0.5);
   const timed = read(join(dir, "b"));
+  assert.ok(timed.words[0].t0 > 3, `first word at ${timed.words[0].t0}`);
   assert.equal(report.check.within, timed.words.filter((w) => w.conf >= 0.5).length);
   assert.match(lines(result.stdout)[0], /, \d+ of 12 with confidence 0\.5 or more$/);
+  for (const g of timed.gaps) assert.ok(Number.isInteger(g.after_word) && g.t0 > 0, JSON.stringify(g));
 });
 
 test("words under --min-conf fall back to faster-whisper, else to an even share of the gap", () => {
+  // --min-conf 1 sends every word to the fallback; it does not move the gate.
   const result = film("words", dir, ["--vocals", "vocals.wav", "--lyrics", "lyrics.txt", "--out", "c", "--min-conf", "1"]);
-  // Every word is below a confidence of 1, so the check fails: exit 3, the files still written.
-  assert.equal(result.status, 3, result.stdout + result.stderr);
+  assert.ok(result.status === 0 || result.status === 3, result.stdout + result.stderr);
+  const report = JSON.parse(readFileSync(join(dir, "c", "words-report.json"), "utf8"));
   const timed = read(join(dir, "c"));
+  // The gate is confidence 0.5 whatever --min-conf says, and the exit follows it.
+  assert.equal(report.check.gate, 0.5);
+  assert.equal(report.check.within, timed.words.filter((w) => w.conf >= 0.5).length);
+  assert.equal(result.status, report.check.within >= 0.9 * 12 ? 0 : 3);
+  assert.equal(report.ok, result.status === 0);
   const whisper = timed.words.filter((w) => w.src === "whisper");
   assert.ok(whisper.length >= 6, `whisper placed ${whisper.length} words`);
   // Whisper tiny's times are coarse (the wiki measures it 0.33 s early on average); refined on
@@ -121,17 +140,32 @@ test("exit 3 on a stem with no voice: the confidence check fails", () => {
   assert.ok(report.ear_check.length >= 1 && report.ear_check.length <= 5);
 });
 
+test("--min-conf 0 cannot pass a weak alignment: the gate stays at confidence 0.5", () => {
+  const result = film("words", dir, ["--vocals", "drums.wav", "--lyrics", "lyrics.txt", "--out", "e0", "--min-conf", "0"]);
+  assert.equal(result.status, 3, result.stdout + result.stderr);
+  assert.match(lines(result.stdout)[0], /^words: \d+ of 12 with confidence 0\.5 or more, want at least 90 percent$/);
+  const report = JSON.parse(readFileSync(join(dir, "e0", "words-report.json"), "utf8"));
+  assert.equal(report.ok, false);
+  assert.equal(report.check.gate, 0.5);
+  assert.equal(report.whisper_ran, false, "nothing is under --min-conf 0, so nothing falls back");
+});
+
 test("the ear check lists at most five spots, most urgent first", () => {
   const sheet = tempDir("words-ear");
-  // A line with no letters, and an all-caps token sung letter by letter.
-  writeFileSync(join(sheet, "lyrics.txt"), "[Verse]\nthe city wakes\n...\nwe count the windows\n[Chorus]\nhold on\nhold the light\n");
+  // A line with no letters (line 1), and an all-caps token sung letter by letter (word 7, "HOLD").
+  writeFileSync(join(sheet, "lyrics.txt"), "[Verse]\nthe city wakes\n...\nwe count the windows\n[Chorus]\nHOLD on\nhold the light\n");
   const result = film("words", dir, ["--vocals", "vocals.wav", "--lyrics", join(sheet, "lyrics.txt"), "--out", "f"]);
-  assert.ok(result.status === 0 || result.status === 3, result.stdout + result.stderr);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
   const report = JSON.parse(readFileSync(join(dir, "f", "words-report.json"), "utf8"));
-  assert.equal(report.ear_check[0].flag, "letters");
-  assert.ok(report.ear_check.length <= 5);
-  for (const spot of report.ear_check) assert.ok(["letters", "gap", "verylow", "lowconf", "length"].includes(spot.flag));
-  assert.ok(lines(result.stdout).some((l) => /^ear check: line 1 has no letters$/.test(l)), result.stdout);
+  assert.ok(report.ear_check.length >= 2 && report.ear_check.length <= 5);
+  assert.deepEqual(report.ear_check.slice(0, 2).map((s: { flag: string; line?: number; i?: number }) => [s.flag, s.line ?? null, s.i ?? null]), [
+    ["letters", 1, null],
+    ["letters", null, 7],
+  ]);
+  for (const spot of report.ear_check) assert.ok(["letters", "order", "gap", "verylow", "length", "lowconf"].includes(spot.flag));
+  const out = lines(result.stdout);
+  assert.ok(out.includes("ear check: line 1 has no letters"), result.stdout);
+  assert.ok(out.some((l) => /^ear check: word 7 "HOLD" at \d+\.\d\d s is sung letter by letter$/.test(l)), result.stdout);
 });
 
 test("a display line that does not consume exactly its words is refused, naming the line", () => {

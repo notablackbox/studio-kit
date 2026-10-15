@@ -39,8 +39,12 @@ test("every kick and every hat of the truth is found within 20 ms, and no kick i
   assert.ok(worstMiss(hits.kick, truth.kicks) <= 0.02, `a kick where the truth has none`);
   assert.ok(worstMiss(truth.hats, hits.hat) <= 0.02, `hat off by ${worstMiss(truth.hats, hits.hat)}`);
   assert.ok(worstMiss(truth.snares, hits.snare) <= 0.02, `snare off by ${worstMiss(truth.snares, hits.snare)}`);
-  // The 45 ms rule: nothing in the snare or hat lists sits on a kick.
+  // The 45 ms rules: nothing in the snare or hat lists sits on a kick, no hat on a snare.
   for (const t of [...hits.snare, ...hits.hat]) assert.ok(worstMiss([t], hits.kick) > 0.045, `${t} is a kick's click`);
+  for (const t of hits.hat) assert.ok(worstMiss([t], hits.snare) > 0.045, `${t} is a snare's noise`);
+  // Precision: every snare and hat found is one the song plays.
+  assert.ok(worstMiss(hits.snare, truth.snares) <= 0.02, `a snare where the truth has none: ${hits.snare.length} found`);
+  assert.ok(worstMiss(hits.hat, truth.hats) <= 0.02, `a hat where the truth has none: ${hits.hat.length} found`);
 
   const report = JSON.parse(readFileSync(join(dir, "a", "hits-report.json"), "utf8"));
   assert.equal(report.ok, true);
@@ -67,7 +71,11 @@ test("no spurious kick in the hat-only bars", () => {
   assert.deepEqual(found.kick.filter((t) => t > from - 0.02 && t < to - 0.02), [], "kicks in bars 2 and 3");
   assert.deepEqual(found.snare.filter((t) => t > from - 0.02 && t < to - 0.02), [], "snares in bars 2 and 3");
   assert.ok(worstMiss(hats.truth.kicks, found.kick) <= 0.02);
+  assert.ok(worstMiss(found.kick, hats.truth.kicks) <= 0.02);
+  assert.ok(worstMiss(hats.truth.snares, found.snare) <= 0.02);
+  assert.ok(worstMiss(found.snare, hats.truth.snares) <= 0.02, "a snare the song does not play");
   assert.ok(worstMiss(hats.truth.hats, found.hat) <= 0.02);
+  assert.ok(worstMiss(found.hat, hats.truth.hats) <= 0.02, "a hat the song does not play");
 });
 
 test("vocal entries are word starts after silence; the first word is one", () => {

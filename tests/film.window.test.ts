@@ -33,7 +33,9 @@ test("a phrase of the right length and loudness, starting and ending in word gap
   assert.ok(report.t1 > last.end && report.t1 - last.end <= 0.4 + 1e-6, `tail ${report.t1 - last.end}`);
   assert.ok(report.t1 <= truth.words[7].start - 0.05, "ends in the gap before the next word");
   assert.deepEqual(report.words.map((w: { w: string }) => w.w), truth.words.slice(0, 7).map((w) => w.word));
-  assert.ok(Math.abs(report.length - (report.t1 - report.t0)) < 1e-6);
+  // The length is the window's own, rounded once (not the difference of two rounded times).
+  assert.equal(report.length, Number(report.length.toFixed(4)));
+  assert.ok(Math.abs(report.length - (report.t1 - report.t0)) <= 1.5e-4);
   assert.ok(report.length >= 4 && report.length <= 8);
 
   const wav = readWav(join(dir, "a", "W01.wav"));

@@ -90,7 +90,8 @@ test("sections come from the lyric sheet's tags: evenly by bars without words, f
   const even = film("beats", dir, ["--drums", "drums.wav", "--out", "d", "--lyrics", "lyrics.txt"]);
   assert.equal(even.status, 0, even.stdout + even.stderr);
   const map = read(join(dir, "d"));
-  assert.deepEqual(map.sections.map((s) => [s.name, s.source]), [["Verse", "lyrics-tag"], ["Chorus", "lyrics-tag"]]);
+  // Without words the times are a guess: named by the tags, but heuristic.
+  assert.deepEqual(map.sections.map((s) => [s.name, s.source]), [["Verse", "heuristic"], ["Chorus", "heuristic"]]);
   assert.equal(map.sections[0].t0, 0);
   assert.equal(map.sections[0].bar0, 0);
   assert.equal(map.sections[1].t0, map.sections[0].t1);
@@ -103,8 +104,44 @@ test("sections come from the lyric sheet's tags: evenly by bars without words, f
   const timed = film("beats", dir, ["--drums", "drums.wav", "--out", "e", "--lyrics", "lyrics.txt", "--words", words]);
   assert.equal(timed.status, 0, timed.stdout + timed.stderr);
   const sections = read(join(dir, "e")).sections;
-  assert.deepEqual(sections.map((s) => s.name), ["Verse", "Chorus"]);
+  assert.deepEqual(sections.map((s) => [s.name, s.source]), [["Verse", "lyrics-tag"], ["Chorus", "lyrics-tag"]]);
   assert.ok(Math.abs(sections[1].t0 - truth.sections[1].start) <= 0.03, `chorus at ${sections[1].t0}, truth ${truth.sections[1].start}`);
+});
+
+test("two adjacent tags never make a zero-length section: the empty one is merged, with a note", () => {
+  // [Intro] has no line of its own, and [Bridge] none either, at the end.
+  writeFileSync(
+    join(dir, "tags.txt"),
+    "[Intro]\n[Verse - spoken]\nthe city wakes\nwe count the windows\n[Chorus]\nhold on\nhold the light\n[Bridge]\n",
+  );
+  const words = truthWords(truth, join(dir, "words-tags.json"));
+  for (const [out, extra] of [["t1", []], ["t2", ["--words", words]]] as const) {
+    const result = film("beats", dir, ["--drums", "drums.wav", "--out", out, "--lyrics", "tags.txt", ...extra]);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    const map = read(join(dir, out));
+    assert.deepEqual(map.sections.map((s) => s.name), ["Verse", "Chorus"], out);
+    for (const s of map.sections) assert.ok(s.t1 > s.t0 && s.bar1 > s.bar0, `${out}: ${JSON.stringify(s)}`);
+    assert.equal(map.sections[0].t0, 0);
+    assert.equal(map.sections.at(-1)!.t1, map.duration);
+    const report = JSON.parse(readFileSync(join(dir, out, "beats-report.json"), "utf8"));
+    assert.deepEqual(report.section_notes, [
+      "[Intro] has no lyric line of its own: merged into Verse",
+      "[Bridge] has no lyric line of its own: merged into Chorus",
+    ]);
+  }
+
+  // Two tags with lines whose first words fall on the same downbeat: the later is merged.
+  writeFileSync(join(dir, "three.txt"), "[Verse]\nthe city wakes\n[Pre]\nwe count the windows\n[Chorus]\nhold on\nhold the light\n");
+  const moved = JSON.parse(readFileSync(words, "utf8"));
+  for (const w of moved.words) if (w.line === 2) w.t0 = 3.2; // "hold on" moved into the bar of "we count"
+  writeFileSync(join(dir, "words-moved.json"), JSON.stringify(moved));
+  const result = film("beats", dir, ["--drums", "drums.wav", "--out", "t3", "--lyrics", "three.txt", "--words", "words-moved.json"]);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const map = read(join(dir, "t3"));
+  assert.deepEqual(map.sections.map((s) => [s.name, s.source]), [["Verse", "lyrics-tag"], ["Pre", "lyrics-tag"]]);
+  for (const s of map.sections) assert.ok(s.t1 > s.t0);
+  const report = JSON.parse(readFileSync(join(dir, "t3", "beats-report.json"), "utf8"));
+  assert.deepEqual(report.section_notes, ["[Chorus] starts on the same downbeat as Pre: merged into Pre"]);
 });
 
 test("refusals: one line each on stdout, exit 2, nothing written", () => {

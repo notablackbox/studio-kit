@@ -1,6 +1,6 @@
 import { before, test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { db, film, lines, power, readWav, song, worstMiss, type Truth } from "./fixtures/film.ts";
 
@@ -14,10 +14,15 @@ before(() => {
 });
 
 test("four stems, the words in the vocal stem and the hits in the drum stem", () => {
+  // A stems folder from an earlier run is replaced as a whole, never mixed with the new stems.
+  mkdirSync(join(dir, "a", "stems"), { recursive: true });
+  writeFileSync(join(dir, "a", "stems", "old.wav"), "an earlier run's leftover");
   const result = film("stems", dir, ["--in", "song.wav", "--out", "a"]);
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.equal(result.stderr, "");
   assert.deepEqual(readdirSync(join(dir, "a", "stems")).sort(), ["bass.wav", "drums.wav", "other.wav", "vocals.wav"]);
+  // Nothing left beside them: no staging folder, no old one.
+  assert.deepEqual(readdirSync(join(dir, "a")).sort(), ["stems", "stems-report.json"]);
   const report = JSON.parse(readFileSync(join(dir, "a", "stems-report.json"), "utf8"));
   assert.equal(report.ok, true);
   assert.deepEqual(report.inputs, { in: join(dir, "song.wav") });
@@ -66,6 +71,8 @@ test("four stems, the words in the vocal stem and the hits in the drum stem", ()
   assert.ok(worstMiss(found.kick, truth.kicks) <= 0.02, "a kick the song does not have");
   assert.ok(worstMiss(truth.snares, found.snare) <= 0.02, `snare ${worstMiss(truth.snares, found.snare)}`);
   assert.ok(worstMiss(truth.hats, found.hat) <= 0.02, `hat ${worstMiss(truth.hats, found.hat)}`);
+  assert.ok(worstMiss(found.snare, truth.snares) <= 0.02, "a snare the song does not have");
+  assert.ok(worstMiss(found.hat, truth.hats) <= 0.02, "a hat the song does not have");
 });
 
 function correlation(a: Float64Array, b: Float64Array): number {

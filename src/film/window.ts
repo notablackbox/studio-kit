@@ -272,7 +272,7 @@ async function main(): Promise<number> {
       outputs: { wav: `${name}.wav`, mp3: `${name}.mp3`, report: "window-report.json" },
       t0: r(t0),
       t1: r(t1),
-      length: r(t1) - r(t0),
+      length: r(length),
       tail: r(gates.at(-1)!.tail),
       phrases: gates.map((g) => ({ t0: r(g.t0), t1: r(g.t1), words: [g.first, g.last] })),
       words: words.slice(from, to + 1),

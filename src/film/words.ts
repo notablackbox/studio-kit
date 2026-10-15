@@ -5,7 +5,8 @@ import { EXIT, Failed, Refused, fromCaller, isMain, outProblem, parseFlags, prin
 // of, an even share of the gap for the rest; `conf` and `src` per word, lines and long gaps,
 // and an ear-check list of at most five spots. With --display, each display line must consume
 // exactly its lyric line's words. Exit 3 when fewer than 90 percent of the words are within
-// 0.10 s of --expect's times, or, without --expect, have a confidence of --min-conf or more.
+// 0.10 s of --expect's times, or, without --expect, have a confidence of 0.5 or more. That gate
+// is fixed: --min-conf only sets which words go to the fallback.
 
 const COMMAND = "film:words";
 const TIMEOUT_MS = 20 * 60 * 1000;
@@ -13,7 +14,7 @@ const TIMEOUT_MS = 20 * 60 * 1000;
 type Spot = { flag: string; message: string; i?: number; line?: number; t0: number | null };
 type Timed = {
   words_json: { words: unknown[]; lines: unknown[]; gaps: unknown[] };
-  check: { by: "expect" | "conf"; within: number; of: number; share: number; ok: boolean };
+  check: { by: "expect" | "conf"; within: number; of: number; share: number; ok: boolean; gate?: number };
   failures: string[];
   flags: Spot[];
   ear_check: Spot[];
@@ -71,7 +72,7 @@ async function main(): Promise<number> {
   const checked =
     timed.check.by === "expect"
       ? `${timed.check.within} of ${timed.check.of} within 0.10 s of the expected times`
-      : `${timed.check.within} of ${timed.check.of} with confidence ${minConf} or more`;
+      : `${timed.check.within} of ${timed.check.of} with confidence ${timed.check.gate} or more`;
   console.log(`words: ${timed.check.of} words in ${timed.lines} lines (${w2v} w2v, ${whisper} whisper, ${interp} interp), ${checked}`);
   for (const spot of timed.ear_check) console.log(`ear check: ${printable(spot.message)}`);
   return EXIT.done;

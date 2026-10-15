@@ -1,29 +1,35 @@
 """The timed words behind film:words (claudia.gallery's toolkit wiki, item 5; formats: words.json).
 
-    python3 -I -m film_py.words '<spec>'      (or the spec on stdin)
+    python3 -I -m film_py.words '<spec>'
 
-The spec: {"vocals": path, "lyrics": path, "display": null | path, "expect": null | path,
-"min_conf": 0.5}.
+The spec is the one argument, JSON: {"vocals": path, "lyrics": path, "display": null | path,
+"expect": null | path, "min_conf": 0.5}. (Stdin is read only when there is no argument,
+which the kit's runner never does.)
 
 1. Forced alignment of the sheet's words, romanised to the MMS_FA bundle's dictionary (a to
    z and the apostrophe, digits spelled out), on the vocal stem at 16 kHz: torchaudio's
    wav2vec2 MMS_FA emissions in 30 s chunks with 2 s of context either side, then a Viterbi
    pass (functional.forced_align). A word's `conf` is the mean probability over its frames.
-   Each word's edges are then trimmed to the vocal energy: its end to the last 5 ms frame at a
-   tenth of its peak, its start to the first such frame from 0.1 s before (never into the word
-   before), since the aligner lets a final consonant run on into the silence after it.
+   Each word's edges are then moved to the vocal energy (refine(): out from its loudest frame
+   through frames at 5 percent of that peak, bridging closures under 80 ms, inside its
+   neighbours, at most 0.25 s past the aligner's edges), since the aligner lets a final
+   consonant run on into silence and ends a weak final vowel early.
 2. A word under `min_conf` falls back, as the wiki merges them: to faster-whisper tiny's word
    with the same text heard between its placed neighbours (src whisper: Whisper's end; its
    start, except that a word over 0.45 s starts at the aligner's start when that falls inside
-   it, else at the first 10 ms frame over 0.3 of its peak); else, between two placed words of
-   its own line, to an even share of the gap (src interp); else it keeps the aligner's time.
-3. The check: with `expect` (a words.json or the test song's truth.json), the share of words
+   it, else at the first 10 ms frame over 0.3 of its peak; then refined the same way); else,
+   between two placed words of its own line, to an even share of the gap (src interp); else it
+   keeps the aligner's time. `min_conf` tunes the fallback only, never the gate.
+3. The gate: with `expect` (a words.json or the test song's truth.json), the share of words
    whose start and end are both within 0.10 s of the expected ones; else the share with `conf`
-   at `min_conf` or more. Under 90 percent fails (exit 3 on the Node side).
+   of 0.5 or more (GATE, fixed). Under 90 percent fails (exit 3 on the Node side).
 4. The ear check, most urgent first, at most five spots: letters (a line with no letters, or an
    all-caps token sung letter by letter), order, gap (over 1 s between two words of a line),
    verylow (conf under 0.1), length (over 1.2 s, or over three times its line's median),
    lowconf (conf under 0.3, or a time from the fallback).
+5. gaps: 2 s or more between two words, or after the last word to the end of the stem, each
+   with the word it follows (`after_word`, always an index); the silence before the first
+   word is not a gap.
 """
 
 import json
@@ -31,7 +37,7 @@ import sys
 
 import numpy as np
 
-from film_py import done, model, models_dir, offline, quiet, refuse, spec, threads
+from film_py import done, model, models_dir, offline, quiet, refuse, shown, spec, threads
 from film_py import audio, lyrics
 
 SR = 16000
@@ -39,6 +45,7 @@ CHUNK = 30.0
 CONTEXT = 2.0
 TOLERANCE = 0.10
 SHARE = 0.9
+GATE = 0.5  # the confidence the gate counts, whatever --min-conf is
 LEVEL = 0.05  # -26 dB under the word's peak
 BRIDGE = 0.08
 REACH = 0.25
@@ -72,13 +79,13 @@ def read_expect(path, count):
 
 
 def check_display(text, lines):
-    shown = lyrics.display_counts(text)
-    if len(shown) != len(lines):
-        refuse([f"--display has {len(shown)} lines, the lyric sheet {len(lines)}"])
+    counted = lyrics.display_counts(text)
+    if len(counted) != len(lines):
+        refuse([f"--display has {len(counted)} lines, the lyric sheet {len(lines)}"])
     problems = []
-    for n, ((line, count), lyric) in enumerate(zip(shown, lines), start=1):
+    for n, ((line, count), lyric) in enumerate(zip(counted, lines), start=1):
         if count != len(lyric["words"]):
-            problems.append(f"display line {n} ({json.dumps(line, ensure_ascii=False)}) shows {count} words, its lyric line has {len(lyric['words'])}")
+            problems.append(f"display line {n} ({shown(line)}) shows {count} words, its lyric line has {len(lyric['words'])}")
     if problems:
         refuse(problems)
 
@@ -323,9 +330,7 @@ def main(argv) -> int:
         own = [t for t in timed if t["line"] == n]
         if own:
             out_lines.append({"line": n, "text": line["text"], "t0": own[0]["t0"], "t1": own[-1]["t1"]})
-    gaps = []
-    if timed[0]["t0"] >= 2.0:
-        gaps.append({"t0": 0.0, "t1": timed[0]["t0"], "after_word": None})
+    gaps = []  # the silence before the first word is not a gap: every gap follows a word
     for a, b in zip(timed, timed[1:]):
         if b["t0"] - a["t1"] >= 2.0:
             gaps.append({"t0": a["t1"], "t1": b["t0"], "after_word": a["i"]})
@@ -346,11 +351,11 @@ def main(argv) -> int:
         if not ok:
             failures = [f"words: {within} of {len(timed)} within 0.10 s of the expected times, want at least 90 percent"] + off[:20]
     else:
-        within = sum(1 for t in timed if t["conf"] >= min_conf)
-        check = {"by": "conf", "within": within, "of": len(timed), "min_conf": min_conf}
+        within = sum(1 for t in timed if t["conf"] >= GATE)
+        check = {"by": "conf", "within": within, "of": len(timed), "gate": GATE}
         ok = within >= SHARE * len(timed)
         if not ok:
-            failures = [f"words: {within} of {len(timed)} with confidence {min_conf:g} or more, want at least 90 percent"]
+            failures = [f"words: {within} of {len(timed)} with confidence {GATE:g} or more, want at least 90 percent"]
     check["share"] = round(within / len(timed), 3)
     check["ok"] = ok
     flags = flags_for(sheet_lines, words, timed)

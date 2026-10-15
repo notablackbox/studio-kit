@@ -1,8 +1,9 @@
 """The beat map behind film:beats (claudia.gallery's toolkit wiki, item 6).
 
-    python3 -I -m film_py.beats '<spec>'      (or the spec on stdin)
+    python3 -I -m film_py.beats '<spec>'
 
-The spec: {"drums": path, "downbeat_phase": null | 0..3, "tempo_range": [low, high],
+The spec is the one argument, JSON (stdin is read only when there is none, which the kit's
+runner never does): {"drums": path, "downbeat_phase": null | 0..3, "tempo_range": [low, high],
 "lyrics": null | path, "words": null | path}. Prints beats.json's content and a few figures.
 
 1. Onset strength: the spectral flux of the drum stem every 4 ms, on square-root magnitudes
@@ -18,9 +19,12 @@ The spec: {"drums": path, "downbeat_phase": null | 0..3, "tempo_range": [low, hi
    beat 1) with the most low-band (30 to 150 Hz) onset energy. A block whose two best phases
    are within 10 percent abstains (kicks on 1 and 3 tie); when every block abstains, the first
    kick of the song decides among the tied phases. `downbeat_phase` overrides (manual).
-5. Sections: from the lyric sheet's [tags] (lyrics-tag): with words.json, each starts on the
-   downbeat its first word belongs to (a word less than 0.8 s before a downbeat is its pickup),
-   else the bars are shared evenly in the tags' order. Without a sheet, one section (heuristic).
+5. Sections: one per [tag] of the lyric sheet. With words.json each starts on the downbeat its
+   first word belongs to (a word less than 0.8 s before a downbeat is its pickup): source
+   lyrics-tag. Without words the bars are shared evenly in the tags' order, named by the tags but
+   heuristic. A tag with no line of its own, or one that would start where the one before
+   starts, is merged into its neighbour with a note, so no section is empty. Without a sheet,
+   one section (heuristic).
 """
 
 import json
@@ -184,46 +188,81 @@ def kick_vote(beats, kick_times, kick_strengths):
     return int(np.argmax(total)), votes
 
 
-def sections(sheet, words, beats, downbeats, duration, drums, rate):
-    """The sections of the beat map, with their energy (the drums' RMS against the loudest second)."""
+def sections(sheet, words, downbeats, duration, drums, rate):
+    """(sections, notes): the beat map's sections, with their energy (the drums' RMS against the
+    loudest second), and a note for every tag merged into a neighbour.
+
+    A tag with no lyric line of its own is merged into the next tag that has lines (the last
+    ones into the one before). With words, each tag starts on the downbeat its first word belongs
+    to (`lyrics-tag`); without them the bars are shared evenly in the tags' order, and the times
+    are a guess (`heuristic`). A tag that would start where the one before starts, or earlier, is
+    merged into it, so no section is ever empty.
+    """
     bars = list(downbeats)
+    notes = []
 
     def bar_of(t):
         return int(np.searchsorted(np.array(bars) - 1e-6, t, side="right")) - 1 if bars else 0
 
     if sheet is None or not sheet[1]:
-        spans = [("song", 0.0, "heuristic")]
+        spans = [("song", 0.0)]
+        source = "heuristic"
     else:
         lines, tags = sheet
-        names = [s["name"] for s in tags]
-        starts = []
-        if words is not None:
-            for k, tag in enumerate(tags):
+        kept, waiting = [], []
+        for k, tag in enumerate(tags):
+            stop = tags[k + 1]["first_line"] if k + 1 < len(tags) else len(lines)
+            if stop <= tag["first_line"]:
+                waiting.append(tag)
+                continue
+            for empty in waiting:
+                notes.append(f"[{empty['name']}] has no lyric line of its own: merged into {tag['name']}")
+            waiting = []
+            kept.append({"name": tag["name"], "first_line": tag["first_line"], "stop": stop})
+        for empty in waiting:
+            if kept:
+                notes.append(f"[{empty['name']}] has no lyric line of its own: merged into {kept[-1]['name']}")
+        if not kept:
+            spans, source = [("song", 0.0)], "heuristic"
+        elif words is not None:
+            source = "lyrics-tag"
+            spans = []
+            for k, tag in enumerate(kept):
                 if k == 0:
-                    starts.append(0.0)
+                    spans.append((tag["name"], 0.0))
                     continue
-                first = next((w for w in words if w.get("line") is not None and w["line"] >= tag["first_line"]), None)
+                first = next((w for w in words if tag["first_line"] <= int(w["line"]) < tag["stop"]), None)
                 if first is None:
-                    starts.append(None)
+                    notes.append(f"[{tag['name']}] has no timed word: merged into {spans[-1][0]}")
                     continue
                 t = float(first["t0"])
                 after = [d for d in bars if d >= t]
                 before = [d for d in bars if d <= t]
                 if after and after[0] - t < 0.8:
-                    starts.append(after[0])
+                    start = after[0]  # the pickup rule
                 elif before:
-                    starts.append(before[-1])
+                    start = before[-1]
                 else:
-                    starts.append(t)
-        if words is None or any(s is None for s in starts):
-            n = max(1, len(bars))
-            starts = [0.0 if k == 0 else (bars[(k * n) // len(tags)] if bars else duration * k / len(tags)) for k in range(len(tags))]
-        spans = [(names[k], starts[k], "lyrics-tag") for k in range(len(tags))]
+                    start = t
+                if start <= spans[-1][1]:
+                    notes.append(f"[{tag['name']}] starts on the same downbeat as {spans[-1][0]}: merged into {spans[-1][0]}")
+                    continue
+                spans.append((tag["name"], start))
+        else:
+            source = "heuristic"
+            spans = []
+            n = len(bars)
+            for k, tag in enumerate(kept):
+                start = 0.0 if k == 0 else (bars[(k * n) // len(kept)] if bars else duration * k / len(kept))
+                if spans and start <= spans[-1][1]:
+                    notes.append(f"[{tag['name']}] has no bar of its own: merged into {spans[-1][0]}")
+                    continue
+                spans.append((tag["name"], start))
 
     second = audio.frame_rms(drums, rate, 1.0, int(np.ceil(duration)))
     loudest = second.max() if len(second) and second.max() > 0 else 1.0
     result = []
-    for k, (name, t0, source) in enumerate(spans):
+    for k, (name, t0) in enumerate(spans):
         t1 = spans[k + 1][1] if k + 1 < len(spans) else duration
         a, b = int(round(t0 * rate)), int(round(t1 * rate))
         rms = float(np.sqrt(np.mean(drums[a:b] ** 2))) if b > a else 0.0
@@ -236,7 +275,7 @@ def sections(sheet, words, beats, downbeats, duration, drums, rate):
             "bar1": len(bars) if k + 1 == len(spans) else max(0, bar_of(t1)),
             "source": source,
         })
-    return result
+    return result, notes
 
 
 def read_words(path):
@@ -280,7 +319,7 @@ def main(argv) -> int:
             phase, votes = kick_vote(beats, kick_times, kick_strengths)
             method = "kick"
         downbeats = beats[phase::4]
-        found = sections(sheet, words, beats, downbeats, duration, drums, rate)
+        found, notes = sections(sheet, words, downbeats, duration, drums, rate)
 
     r = lambda t: round(float(t), 4)  # noqa: E731
     done({
@@ -294,6 +333,7 @@ def main(argv) -> int:
             "sections": found,
         },
         "kick_votes": votes,
+        "section_notes": notes,
         "windows": [{"t": r(f["t"]), "bpm": round(f["bpm"], 2), "score": round(f["score"], 4), "kept": any(f is k for k in kept)} for f in fits],
         "sample_rate": info.samplerate,
     })
