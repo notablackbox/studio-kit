@@ -21,12 +21,23 @@ export async function renderChapter(command: string, report: string, values: Cha
   const { out, chapter } = prepared;
   const suffix = vertical ? ".9x16" : "";
   const names = { video: `${chapter}${suffix}.mp4`, tokens: `${chapter}${suffix}.tokens.json`, audio: `${chapter}${suffix}.audio.json` };
+  // The three outputs go together: an earlier run's are removed before rendering and again on any
+  // failure, so a failed run never leaves a video beside sidecars (or sidecars alone) from before.
+  const clear = () => {
+    for (const name of Object.values(names)) {
+      try {
+        rmSync(join(out, name), { force: true });
+      } catch {
+        // Not a file (a folder in the way): the render or the write fails on it and says so.
+      }
+    }
+  };
   const started = Date.now();
   const stage = await stageChapter(prepared);
   try {
     const [a, b] = prepared.frames;
     const composition = vertical ? "FilmChapterVertical" : "FilmChapter";
-    rmSync(join(out, names.video), { force: true });
+    clear();
     await remotion(`rendering ${composition}`, [
       "render", ENTRY, composition, join(out, names.video),
       `--props=${stage.propsFile}`, `--public-dir=${stage.publicDir}`,
@@ -64,7 +75,7 @@ export async function renderChapter(command: string, report: string, values: Cha
     console.log(`${command.replace("film:", "")}: ${shown(chapter)} ${frames} frames (${probe.duration.toFixed(3)} s, ${probe.width}x${probe.height}, ${probe.fps} fps, ${probe.size} bytes), ${drawn.size} sung words drawn, ${events.length} sound events`);
     return EXIT.done;
   } catch (error) {
-    rmSync(join(out, names.video), { force: true });
+    clear();
     throw error;
   } finally {
     rmSync(stage.dir, { recursive: true, force: true });

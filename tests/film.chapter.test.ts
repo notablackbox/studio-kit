@@ -195,6 +195,21 @@ test("refusals before any work: flags, chapter, range, a missing take, footage o
   assert.equal(readFileSync(join(p.dir, "master.mp4"), "utf8"), "sentinel");
 });
 
+test("a failing render after a good one in the same --out leaves none of the three outputs", () => {
+  const good = film("chapter", p.dir, [...p.args("rerun"), "--range", "0:0.2"]);
+  assert.equal(good.status, 0, good.stdout + good.stderr);
+  const outputs = ["ch01.mp4", "ch01.tokens.json", "ch01.audio.json"];
+  for (const f of outputs) assert.ok(existsSync(join(p.dir, "rerun", f)), f);
+  // The still plate the range shows is not an image: the browser cannot draw it, the render fails.
+  cpSync(join(p.dir, "plates"), join(p.dir, "junk-plates"), { recursive: true });
+  writeFileSync(join(p.dir, "junk-plates", "p-dawn.png"), "not a picture");
+  const args = p.args("rerun", ["--range", "0:0.2"]).map((a, k, all) => (all[k - 1] === "--plates" ? "junk-plates" : a));
+  const failed = film("chapter", p.dir, args);
+  assert.equal(failed.status, 1, failed.stdout + failed.stderr);
+  assert.equal(failed.stdout, "");
+  for (const f of outputs) assert.equal(existsSync(join(p.dir, "rerun", f)), false, `${f} is left from the good run`);
+});
+
 test("a render that cannot be written exits 1 with one line on stderr", () => {
   mkdirSync(join(p.dir, "blocked", "ch01.mp4"), { recursive: true });
   writeFileSync(join(p.dir, "blocked", "ch01.mp4", "keep"), "");
