@@ -311,6 +311,9 @@ async function main(): Promise<number> {
       // A silent stem (or a silent stretch of it): normalising would only lift the noise floor,
       // and a silent window would pass to the clip as if she sang. Checked and failed.
       const level = source > 0 ? `${dbfs(source).toFixed(1)} dBFS` : "-inf dBFS";
+      // No audio on a failed run: an earlier run's window of the same name is removed.
+      rmSync(join(out, `${name}.wav`), { force: true });
+      rmSync(join(out, `${name}.mp3`), { force: true });
       writeReport(out, "window", {
         ok: false,
         inputs,

@@ -505,7 +505,8 @@ A silent drum stem (the onset strength, before normalising, peaks under 1.0:
 digital silence, dither, a drum hit under about -70 dBFS) has no grid to find,
 and any tempo would be arbitrary: it is checked and failed, exit 3,
 `beats: the drum stem is silent (no onsets)`, with `beats-report.json` written
-(`ok` false, `onset_peak`, `onset_floor`) and no `beats.json`.
+(`ok` false, `onset_peak`, `onset_floor`) and no `beats.json` (an earlier
+run's in the same `--out` is removed).
 
 `film:words --vocals <vocals.wav> --lyrics <lyrics.txt> --out <dir>`: a time for
 every sung word. The sheet's words (tag and blank lines skipped, the lyric
@@ -591,7 +592,8 @@ defaults to `window-<from>-<to>`) and `window-report.json` with `song_t0`,
 `duration`, `from`, `to`, the voice's `t0` and `t1` in song time, `tail`, the
 `phrases`, the `words`, `rms_dbfs` and `peak_dbfs`. A kept part quieter than
 -60 dBFS RMS before normalising (a silent vocal stem, or a silent stretch of it)
-is checked and failed, exit 3, with no audio written and the report's `ok`
+is checked and failed, exit 3, with no audio written (an earlier
+`<name>.wav` and `<name>.mp3` in `--out` are removed) and the report's `ok`
 false (`rms_dbfs` null for digital silence):
 `window: the kept phrases are silent (-inf dBFS RMS, want at least -60 dBFS)`.
 A `--duration` under 4 s or over 8 s is refused. `--allow-short` lifts the 4 s floor; it exists for the
@@ -718,7 +720,8 @@ than a frame late is `late start` (the plate plays the head); a clip with nothin
 whole shot `{plate}`. A sung or motion shot left with neither a take nor a
 plate (none delivered, or a late start with no plate to fill the head) fails:
 exit 3, one line each, the report written (`failures`: each shot and why) and
-no `edl.json`. The summary
+no `edl.json` (an earlier run's in the same `--out` is removed, so a stale edit
+list never stays beside a failed report). The summary
 line counts the shots from takes, plates, footage and design. The report also gives, per sung shot, its sung
 seconds (each word of `--words` padded 30 ms, merged under 0.12 s) and how many
 of them the in-sync spans cover. A clip file that does not parse, or whose `id`
@@ -1531,8 +1534,8 @@ off, as in [Listening](#listening-filmstems-filmbeats-filmwords-filmhits-filmwin
 with `words.json` written too; `film:audit`, one `gate <name>: ...` line per
 failing gate; `film:edl`, one `edl: "s004" has neither a take nor a plate (clip "W09" has no delivered take)`
 (or `edl: "s002" has neither a take nor a plate (take "W01-t2" starts 0.200 s late (...))`) line
-per shot, and no `edl.json`; `film:window`, `window: the kept phrases are silent (...)`
-and no audio; `film:beats`, `beats: the drum stem is silent (no onsets)` and no `beats.json`; `film:sync`, `sync: "take-2.mp4" does not copy the window (NCC 0.04, want over 0.2)`;
+per shot, and no `edl.json` (an earlier one removed); `film:window`, `window: the kept phrases are silent (...)`
+and no audio (an earlier one of the same name removed); `film:beats`, `beats: the drum stem is silent (no onsets)` and no `beats.json` (an earlier one removed); `film:sync`, `sync: "take-2.mp4" does not copy the window (NCC 0.04, want over 0.2)`;
 `film:gate`, `gate: 10/12` and a line per word not drawn; `film:history`, the differing pixel; `film:flash`,
 `flash: 4 flashes in one second between 0.042 and 2.000 s, want at most 3` (and
 `flash: 6 red flashes in one second ...` for red flashes); `film:mix`,

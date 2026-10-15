@@ -180,6 +180,16 @@ test("a window cut from a silent stem fails: exit 3, one line, the report writte
   assert.deepEqual(report.outputs, { report: "window-report.json" });
   assert.equal(existsSync(join(dir, "quiet", "W09.wav")), false);
   assert.equal(existsSync(join(dir, "quiet", "W09.mp3")), false);
+
+  // A good window then the silent one under the same name and --out: the old audio is gone.
+  const args = (vocals: string) => ["--vocals", vocals, "--words", "words.json", "--song-t0", t0, "--duration", "5", "--from", "0", "--to", "6", "--name", "W09", "--out", "again"];
+  const good = film("window", dir, args("vocals.wav"));
+  assert.equal(good.status, 0, good.stdout + good.stderr);
+  assert.ok(existsSync(join(dir, "again", "W09.wav")));
+  const failed = film("window", dir, args("silent.wav"));
+  assert.equal(failed.status, 3, failed.stdout + failed.stderr);
+  assert.equal(existsSync(join(dir, "again", "W09.wav")), false);
+  assert.equal(existsSync(join(dir, "again", "W09.mp3")), false);
 });
 
 test("refusals: one line each on stdout, exit 2, nothing written", () => {

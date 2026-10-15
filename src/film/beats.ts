@@ -1,3 +1,5 @@
+import { rmSync } from "node:fs";
+import { join } from "node:path";
 import { EXIT, Failed, Refused, fromCaller, isMain, outProblem, parseFlags, python, refuseReportPaths, requireFile, run, writeIn, writeReport } from "./lib/cli.ts";
 
 // film:beats: the beat map of a take, from its drum stem. Never one BPM: local tempos on 20 s
@@ -62,6 +64,8 @@ async function main(): Promise<number> {
   const mapped = await python<Mapped>("beats", [JSON.stringify(spec)], TIMEOUT_MS);
   const inputs = { drums, lyrics, words, downbeat_phase: phase, tempo_range: range };
   if (mapped.silent) {
+    // No beats.json on a failed run: an earlier run's is removed with it.
+    rmSync(join(out, "beats.json"), { force: true });
     writeReport(out, "beats", {
       ok: false,
       inputs,

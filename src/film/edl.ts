@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { EXIT, Failed, Refused, fromCaller, isMain, outProblem, parseFlags, refuseReportPaths, requireFile, run, shown, writeIn, writeReport } from "./lib/cli.ts";
 import { KEY, readBoard, type Shot } from "./lib/board.ts";
@@ -268,6 +268,8 @@ async function main(): Promise<number> {
       const line = m.fail ?? `${head}has neither a take nor a plate${m.why ? ` (${m.why})` : ""}`;
       return { shot: m.shot, why: line.startsWith(head) ? line.slice(head.length) : line, line };
     });
+    // No edl.json on a failed run: an earlier run's is removed, so nothing stale is left to render.
+    rmSync(join(out, "edl.json"), { force: true });
     writeReport(out, "edl", {
       ok: false,
       inputs,

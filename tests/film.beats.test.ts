@@ -144,8 +144,8 @@ test("two adjacent tags never make a zero-length section: the empty one is merge
   assert.deepEqual(report.section_notes, ["[Chorus] starts on the same downbeat as Pre: merged into Pre"]);
 });
 
-test("a silent drum stem fails: exit 3, one line, the report written and no beats.json", () => {
-  // Ten seconds of digital silence, 44.1 kHz 16-bit mono.
+// Ten seconds of digital silence, 44.1 kHz 16-bit mono, as silent-drums.wav.
+function silentDrums(): void {
   const rate = 44100;
   const samples = rate * 10;
   const wav = Buffer.alloc(44 + samples * 2);
@@ -162,6 +162,10 @@ test("a silent drum stem fails: exit 3, one line, the report written and no beat
   wav.write("data", 36, "ascii");
   wav.writeUInt32LE(samples * 2, 40);
   writeFileSync(join(dir, "silent-drums.wav"), wav);
+}
+
+test("a silent drum stem fails: exit 3, one line, the report written and no beats.json", () => {
+  silentDrums();
   const out = join(dir, "silent");
   const result = film("beats", dir, ["--drums", "silent-drums.wav", "--out", "silent"]);
   assert.equal(result.status, 3, result.stdout + result.stderr);
@@ -172,6 +176,16 @@ test("a silent drum stem fails: exit 3, one line, the report written and no beat
   assert.deepEqual(report.outputs, { report: "beats-report.json" });
   assert.equal(report.onset_peak, 0);
   assert.ok(report.onset_floor > 0);
+});
+
+test("a silent stem after a good run in the same --out leaves no beats.json", () => {
+  const good = film("beats", dir, ["--drums", "drums.wav", "--out", "again"]);
+  assert.equal(good.status, 0, good.stdout + good.stderr);
+  assert.ok(existsSync(join(dir, "again", "beats.json")));
+  silentDrums();
+  const failed = film("beats", dir, ["--drums", "silent-drums.wav", "--out", "again"]);
+  assert.equal(failed.status, 3, failed.stdout + failed.stderr);
+  assert.deepEqual(readdirSync(join(dir, "again")), ["beats-report.json"]);
 });
 
 test("refusals: one line each on stdout, exit 2, nothing written", () => {
