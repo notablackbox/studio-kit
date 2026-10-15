@@ -611,7 +611,10 @@ passes it.
 The board is `shots.json` in claudia.gallery's format (wiki/formats, "The
 board"): `{version: 1, duration, chapters, shots, plates}`. The kit adds three
 fields: a shot's `genuine` (true for real product footage) and `footage` (the
-recorded file it plays), and a chapter's `box` (a short text, at most 60
+recorded file it plays, a plain file name in the footage folder: no slash or
+backslash, not `.` or `..`, else refused at the board read,
+`--board: shots[2].footage is "../capture.webm", want a plain file name (no slash, not . or ..) or null`),
+and a chapter's `box` (a short text, at most 60
 characters). All three commands that read a board check it first and refuse it
 (exit 2, one line per problem, at most 20) when it does not fit: an unknown
 field at the top, in a shot, a type entry, a device, a chapter or a plate; a
@@ -713,8 +716,8 @@ A shot follows at most 16 takes down the chain: where the 16th diverges, the
 next cover is not followed and the plate plays from there, a `chain too long`
 fallback (`fallback: "s002" plays plate "p-street" from 2.500 s: clip "W01-c16" is past the cover chain's 16 takes`). A `genuine` shot with `footage` is `{footage: "<file>"}` (the file the
 walk or a terminal capture recorded; the chapter engine plays it like a clip;
-a footage value that is not a plain file name, with a slash or `..`, fails with
-exit 3: `edl: "s003" footage "../x.webm" is not a plain file name`);
+a footage value that is not a plain file name, with a slash or `..`, is
+refused with exit 2 when the board is read, as by every board command);
 a genuine shot without footage resolves as any other. A still or 2.5D shot is
 `{plate}`, or `{design: true}` with `plate: null` (pure motion design). A hole
 is filled from the shot's plate and noted in the report (`fallbacks`, and a

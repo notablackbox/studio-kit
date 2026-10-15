@@ -113,7 +113,11 @@ export function boardProblems(raw: unknown): string[] {
       for (const key of ["plate", "clip"]) {
         if (shot[key] != null && (typeof shot[key] !== "string" || !KEY.test(shot[key] as string))) bad(`${at}.${key}`, shot[key], "a key of letters, digits, dot, dash or underscore, or null");
       }
-      if (shot.footage != null && (typeof shot.footage !== "string" || shot.footage === "")) bad(`${at}.footage`, shot.footage, "a file name or null");
+      // A plain file name, as film:edl and the chapter engine read it: found in the footage
+      // folder, never elsewhere (no slash or backslash, not . or ..).
+      if (shot.footage != null && (typeof shot.footage !== "string" || shot.footage === "" || /[/\\]/.test(shot.footage) || shot.footage === "." || shot.footage === "..")) {
+        bad(`${at}.footage`, shot.footage, "a plain file name (no slash, not . or ..) or null");
+      }
       if (shot.treatment != null && !(TREATMENTS as readonly unknown[]).includes(shot.treatment)) bad(`${at}.treatment`, shot.treatment, `${oneOf(TREATMENTS)}, or null`);
       if ("transition_in" in shot && !(TRANSITIONS as readonly unknown[]).includes(shot.transition_in)) bad(`${at}.transition_in`, shot.transition_in, oneOf(TRANSITIONS));
       if ("accent" in shot && (typeof shot.accent !== "string" || !HEX.test(shot.accent))) bad(`${at}.accent`, shot.accent, "a hex colour (#D97757)");

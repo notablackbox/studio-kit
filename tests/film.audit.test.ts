@@ -443,7 +443,7 @@ test("genuine: footage not recorded fails; --recordings counts; --defer provenan
   assert.equal(notRecorded, 'gate genuine: "s003" footage "shot-02.webm" is not in walk-report.json or recordings.json');
 
   const terminal = changedBoard(dir, "genuine3.json", (_b, shot) => {
-    shot("s003").footage = "footage/terminal-01.mp4";
+    shot("s003").footage = "terminal-01.mp4";
   });
   assert.equal(audit(terminal, "genuine3", ["--recordings", "recordings.json"]).status, 0);
 
@@ -558,6 +558,9 @@ test("a malformed board is refused: exit 2, one line per problem, nothing writte
     // at the shot's end it would never be drawn; before its start, likewise not where declared.
     [(_b, s) => Object.assign((s[1].devices as Record<string, unknown>[])[0], { key: "T", params: { text: "CITY STATUS: AWAKE", at: 5.473 } }), ['--board: shots[1].devices[0].params.at is 5.473, want a time inside shot "s002" (0.976 to 5.473 s, frames 24 to 131)']],
     [(_b, s) => Object.assign((s[1].devices as Record<string, unknown>[])[0], { key: "F", params: { text: "CITY STATUS: AWAKE", at: 10 } }), ['--board: shots[1].devices[0].params.at is 10, want a frame inside shot "s002" (0.976 to 5.473 s, frames 24 to 131)']],
+    // Footage is a plain file name in the footage folder, as film:edl reads it.
+    [(_b, s) => (s[2].footage = "../capture.webm"), ['--board: shots[2].footage is "../capture.webm", want a plain file name (no slash, not . or ..) or null']],
+    [(_b, s) => (s[2].footage = ".."), ['--board: shots[2].footage is "..", want a plain file name (no slash, not . or ..) or null']],
     [(_b, s) => (s[4].treatment = "zoom"),['--board: shots[4].treatment is "zoom", want one of push, drift, parallax-left, parallax-right, rise, settle, or null']],
     [(_b, s) => (s[4].plate = "../p-roof"), ['--board: shots[4].plate is "../p-roof", want a key of letters, digits, dot, dash or underscore, or null']],
     [(b) => ((b.chapters as Record<string, unknown>[])[0].box = 7), ["--board: chapters[0].box is 7, want a short text (at most 60 characters)"]],

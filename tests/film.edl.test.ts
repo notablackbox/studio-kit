@@ -127,16 +127,15 @@ test("a failing run after a good one in the same --out leaves no edl.json", () =
   assert.deepEqual(readdirSync(join(dir, "stale")), ["edl-report.json"]);
 });
 
-test("footage must be a plain file name: a path fails, exit 3", () => {
+test("footage must be a plain file name: a path is refused at the board read, exit 2", () => {
   for (const [n, footage] of ["../shot-01.webm", "footage/shot-01.webm", ".."].entries()) {
     const board = changedBoard(dir, `footage${n}.json`, (_b, shot) => {
       shot("s003").footage = footage;
     });
     const result = film("edl", dir, ARGS(board, "clips", `footage${n}`));
-    assert.equal(result.status, 3, result.stdout + result.stderr);
-    assert.deepEqual(lines(result.stdout), [`edl: "s003" footage ${JSON.stringify(footage)} is not a plain file name`]);
-    assert.deepEqual(report(`footage${n}`).missing, ["s003"]);
-    assert.equal(existsSync(join(dir, `footage${n}`, "edl.json")), false);
+    assert.equal(result.status, 2, result.stdout + result.stderr);
+    assert.deepEqual(lines(result.stdout), [`--board: shots[2].footage is ${JSON.stringify(footage)}, want a plain file name (no slash, not . or ..) or null`]);
+    assert.equal(existsSync(join(dir, `footage${n}`)), false);
   }
 });
 

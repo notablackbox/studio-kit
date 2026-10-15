@@ -109,16 +109,14 @@ function readClips(folder: string, roots: string[]): Map<string, Clip | null> {
 const delivered = (clip: Clip | null): Take | null =>
   clip ? clip.takes.filter((t) => t.status === "delivered" && t.file !== null).sort((a, b) => b.n - a.n)[0] ?? null : null;
 
-type Resolved = { entry: Entry | null; fallbacks: Fallback[]; why: string | null; spans: [number, number][]; fail?: string };
+type Resolved = { entry: Entry | null; fallbacks: Fallback[]; why: string | null; spans: [number, number][] };
 
 function resolve(shot: Shot, clips: Map<string, Clip | null>): Resolved {
   const fallbacks: Fallback[] = [];
   // Genuine footage (the walk's recording, or a terminal capture) plays like a clip.
   if (shot.genuine && shot.footage) {
-    // A plain file name: the chapter engine finds it in the footage folder, never elsewhere.
-    if (/[/\\]/.test(shot.footage) || shot.footage === "." || shot.footage === "..") {
-      return { entry: null, fallbacks, why: null, spans: [], fail: `edl: ${shown(shot.id)} footage ${shown(shot.footage)} is not a plain file name` };
-    }
+    // A plain file name (the board check refuses any other): the chapter engine finds it in the
+    // footage folder, never elsewhere.
     return { entry: { footage: shot.footage }, fallbacks, why: null, spans: [] };
   }
   if (!isClipShot(shot)) {
@@ -267,13 +265,13 @@ async function main(): Promise<number> {
 
   const edl: Record<string, Entry> = {};
   const fallbacks: Fallback[] = [];
-  const missing: { shot: string; why: string | null; fail?: string }[] = [];
+  const missing: { shot: string; why: string | null }[] = [];
   const cover: Record<string, ReturnType<typeof coverage>> = {};
   for (const shot of board.shots) {
     const resolved = resolve(shot, clips);
     fallbacks.push(...resolved.fallbacks);
     if (resolved.entry) edl[shot.id] = resolved.entry;
-    else missing.push({ shot: shot.id, why: resolved.why, fail: resolved.fail });
+    else missing.push({ shot: shot.id, why: resolved.why });
     if (shot.motion_tier === "sung") cover[shot.id] = coverage(shot, words, resolved.spans);
   }
   const inputs = { board: boardFile, clips: clipsDir, words: wordsFile };
@@ -281,8 +279,8 @@ async function main(): Promise<number> {
     // Each failing shot with why, in the report as on stdout.
     const failures = missing.map((m) => {
       const head = `edl: ${shown(m.shot)} `;
-      const line = m.fail ?? `${head}has neither a take nor a plate${m.why ? ` (${m.why})` : ""}`;
-      return { shot: m.shot, why: line.startsWith(head) ? line.slice(head.length) : line, line };
+      const line = `${head}has neither a take nor a plate${m.why ? ` (${m.why})` : ""}`;
+      return { shot: m.shot, why: line.slice(head.length), line };
     });
     // No edl.json on a failed run: an earlier run's is removed, so nothing stale is left to render.
     rmSync(join(out, "edl.json"), { force: true });
