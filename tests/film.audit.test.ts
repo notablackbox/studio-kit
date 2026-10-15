@@ -249,6 +249,13 @@ test("banned: a --taboo word, as a whole word, in the action, prompt, type or no
   assert.equal(set, 'gate banned: "s002" set has "buzzer"');
   const chapter = failsOnly("banned", "shots.json", "banned6", [], ["--taboo", "wake"], FLAGS.slice(0, 4));
   assert.equal(chapter, 'gate banned: chapters[0].name has "wake"');
+  // The words a device draws count.
+  const device = failsOnly("banned", "shots.json", "banned7", ["s004"], ["--taboo", "lux"], FLAGS.slice(0, 4));
+  assert.equal(device, 'gate banned: "s004" devices has "lux"');
+  // Closed vocabularies and keys are not authored text: a framing, a transition, a type mode,
+  // a device kind or key, a plate key, a clip id, a footage name or a shot id never trips it.
+  const keys = audit("shots.json", "banned8", ["--taboo", "cu,ews,dither,masthead,counter,w,p-street,W01,shot-01,s001,plate3d,sung"], FLAGS.slice(0, 4));
+  assert.equal(keys.status, 0, keys.stdout);
 });
 
 test("treatments: two 2.5D shots in a row with one treatment, or a 2.5D shot without one, fail", () => {
@@ -281,6 +288,16 @@ test("todo: a placeholder anywhere, or a shot without a framing, fails", () => {
     shot("s004").notes = "a mastodon on the water tank";
   });
   assert.equal(failsOnly("todo", lower, "todo2", ["s003"]), 'gate todo: "s003" action has "todo"');
+
+  // In typed lyric text only capitals count: "todo" may be sung (Spanish).
+  const lyric = changedBoard(dir, "todo3.json", (_b, shot) => {
+    (shot("s001").type as Record<string, unknown>[])[0].text = "todo el mundo";
+  });
+  assert.equal(audit(lyric, "todo3", ["--hooks", "todo el mundo|hold the light"], FLAGS.slice(0, 2)).status, 0);
+  const typed = changedBoard(dir, "todo4.json", (_b, shot) => {
+    (shot("s004").type as Record<string, unknown>[])[0].text = "TODO";
+  });
+  assert.equal(failsOnly("todo", typed, "todo4", ["s004"], [], FLAGS.slice(0, 2)), 'gate todo: "s004" type[0].text has "TODO"');
 });
 
 test("genuine: footage not recorded fails; --recordings counts; --defer provenance defers", () => {

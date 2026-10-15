@@ -94,12 +94,18 @@ function readClips(folder: string, roots: string[]): Map<string, Clip | null> {
 const delivered = (clip: Clip | null): Take | null =>
   clip ? clip.takes.filter((t) => t.status === "delivered" && t.file !== null).sort((a, b) => b.n - a.n)[0] ?? null : null;
 
-type Resolved = { entry: Entry | null; fallbacks: Fallback[]; why: string | null; spans: [number, number][] };
+type Resolved = { entry: Entry | null; fallbacks: Fallback[]; why: string | null; spans: [number, number][]; fail?: string };
 
 function resolve(shot: Shot, clips: Map<string, Clip | null>): Resolved {
   const fallbacks: Fallback[] = [];
   // Genuine footage (the walk's recording, or a terminal capture) plays like a clip.
-  if (shot.genuine && shot.footage) return { entry: { footage: shot.footage }, fallbacks, why: null, spans: [] };
+  if (shot.genuine && shot.footage) {
+    // A plain file name: the chapter engine finds it in the footage folder, never elsewhere.
+    if (/[/\\]/.test(shot.footage) || shot.footage === "." || shot.footage === "..") {
+      return { entry: null, fallbacks, why: null, spans: [], fail: `edl: ${shown(shot.id)} footage ${shown(shot.footage)} is not a plain file name` };
+    }
+    return { entry: { footage: shot.footage }, fallbacks, why: null, spans: [] };
+  }
   if (!isClipShot(shot)) {
     // A still or 2.5D shot is its plate; with no plate, it is pure motion design.
     return { entry: shot.plate ? { plate: shot.plate } : { design: true }, fallbacks, why: null, spans: [] };
@@ -202,19 +208,19 @@ async function main(): Promise<number> {
 
   const edl: Record<string, Entry> = {};
   const fallbacks: Fallback[] = [];
-  const missing: { shot: string; why: string | null }[] = [];
+  const missing: { shot: string; why: string | null; fail?: string }[] = [];
   const cover: Record<string, ReturnType<typeof coverage>> = {};
   for (const shot of board.shots) {
     const resolved = resolve(shot, clips);
     fallbacks.push(...resolved.fallbacks);
     if (resolved.entry) edl[shot.id] = resolved.entry;
-    else missing.push({ shot: shot.id, why: resolved.why });
+    else missing.push({ shot: shot.id, why: resolved.why, fail: resolved.fail });
     if (shot.motion_tier === "sung") cover[shot.id] = coverage(shot, words, resolved.spans);
   }
   const inputs = { board: boardFile, clips: clipsDir, words: wordsFile };
   if (missing.length > 0) {
     writeReport(out, "edl", { ok: false, inputs, outputs: { report: "edl-report.json" }, shots: board.shots.length, fallbacks, missing: missing.map((m) => m.shot), coverage: cover });
-    throw new Failed(missing.map((m) => `edl: ${shown(m.shot)} has neither a take nor a plate${m.why ? ` (${m.why})` : ""}`));
+    throw new Failed(missing.map((m) => m.fail ?? `edl: ${shown(m.shot)} has neither a take nor a plate${m.why ? ` (${m.why})` : ""}`));
   }
   writeIn(out, "edl.json", JSON.stringify(edl, null, 2) + "\n");
   writeReport(out, "edl", { ok: true, inputs, outputs: { edl: "edl.json", report: "edl-report.json" }, shots: board.shots.length, fallbacks, missing: [], coverage: cover });

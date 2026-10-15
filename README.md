@@ -550,9 +550,9 @@ summary and the warnings. Any failing gate is exit 3, one line per gate:
 | `budget` | the sung and motion shots' seconds over `--motion-seconds`, or their clips over `--motion-clips`; `skipped` with neither flag |
 | `windows` | a sung shot outside 4 to 8 s or starting inside a word (it must start in a word gap: in `words.json`'s `gaps`, or between words); a motion shot outside 4 to 12 s |
 | `plates` | one plate on two shots that are not next to each other; two clips starting from one plate |
-| `banned` | a `--taboo` word (whole words, any case) in any string of the board: every field of a shot (set, camera, chrome, section, type, devices...), a chapter or a plate; one problem per word and field |
+| `banned` | a `--taboo` word (whole words, any case) in any authored text: a shot's `set`, `action`, `camera`, `chrome`, `section`, `prompt`, `notes`, `type` text and device `params`; a chapter's `name`, `set` and `box`; a plate's `set` and `prompt`. Ids, keys and closed vocabularies (framing, tier, treatment, transition, type mode, device kind and key, accent, plate, clip, footage) are not scanned. One problem per word and field |
 | `treatments` | a 2.5D (`plate3d`) shot without a treatment, or two 2.5D shots in a row with the same one |
-| `todo` | `TODO` or `TBD` (any case, whole words) or `???` anywhere in the board; a shot with no framing or tier; a sung or motion shot with no clip; a 2.5D shot with no plate |
+| `todo` | `TODO` or `TBD` (any case, whole words) or `???` anywhere in the board, except that in `type` text (a lyric may sing "todo") only capital `TODO`, `TBD` and `???` count; a shot with no framing or tier; a sung or motion shot with no clip; a 2.5D shot with no plate |
 | `genuine` | a `genuine` shot whose `footage` or `clip` is not a recorded shot of `--walk-report` (`shots[].file` with `status: recorded`) or an entry of `--recordings` (`recordings[].file`): footage by name or base name, a clip id by a file's stem; `deferred` with `--defer provenance` (the board step defers it, the build enforces it). A genuine shot naming no clip or footage fails even then |
 | `hook` | a `--hooks` entry (pipe-separated) that no shot types as a `masthead` or `mass` card with its whole text (any case, punctuation dropped, spaces folded); a hook written in parts with ` / ` also passes as a `stack` card whose lines (newlines or ` / `) are its parts in order |
 | `box` | two chapters in a row in the same `box` |
@@ -598,7 +598,9 @@ shot's start: `{segs: [{t0, clip: "<clip>-t<n>", in}]}` with
 whose shot runs past its `sync.synced` spans is cut at its `sync.cut_at` to its
 first cover, which plays from there by its own `song_t0` and lag, down the
 chain. A `genuine` shot with `footage` is `{footage: "<file>"}` (the file the
-walk or a terminal capture recorded; the chapter engine plays it like a clip);
+walk or a terminal capture recorded; the chapter engine plays it like a clip;
+a footage value that is not a plain file name, with a slash or `..`, fails with
+exit 3: `edl: "s003" footage "../x.webm" is not a plain file name`);
 a genuine shot without footage resolves as any other. A still or 2.5D shot is
 `{plate}`, or `{design: true}` with `plate: null` (pure motion design). A hole
 is filled from the shot's plate and noted in the report (`fallbacks`, and a

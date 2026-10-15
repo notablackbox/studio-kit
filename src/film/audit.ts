@@ -37,6 +37,8 @@ const MOTION = [4, 12];
 const LEAD_WARN = 0.85;
 // Any case, as whole words (so "mastodon" is not a placeholder); "???" anywhere.
 const PLACEHOLDER = /(?<![\p{L}\p{N}])(?:todo|tbd)(?![\p{L}\p{N}])|\?\?\?/iu;
+// In typed lyric text: capitals only, since "todo" is a word a lyric may sing.
+const TYPED_PLACEHOLDER = /(?<![\p{L}\p{N}])(?:TODO|TBD)(?![\p{L}\p{N}])|\?\?\?/u;
 const GATES = ["tile", "cuts", "sections", "words", "graphics", "lead", "budget", "windows", "plates", "banned", "treatments", "todo", "genuine", "hook", "box"] as const;
 
 type GateName = (typeof GATES)[number];
@@ -347,13 +349,31 @@ export function auditBoard(board: Board, analysis: Analysis, options: Options): 
     const problems: string[] = [];
     const ids: string[] = [];
     const patterns = options.taboo.map((word) => ({ word, re: new RegExp(`(?<![\\p{L}\\p{N}])${word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}])`, "iu") }));
-    // Every string in the board, reported once per word and top-level field of a shot, a
-    // chapter or a plate.
+    // Every authored string in the board, reported once per word and field of a shot, a chapter
+    // or a plate. Closed vocabularies and keys (ids, framing, tier, treatment, transition,
+    // type modes, device kinds and keys, accents, plate keys, clip ids, footage names, the
+    // beat map's section lists) are not authored text and are skipped.
     const strings = (value: unknown): string[] =>
       typeof value === "string" ? [value] : Array.isArray(value) ? value.flatMap(strings) : isObject(value) ? Object.values(value).flatMap(strings) : [];
+    const AUTHORED: Record<string, (value: unknown) => string[]> = {
+      set: strings,
+      action: strings,
+      camera: strings,
+      chrome: strings,
+      section: strings,
+      prompt: strings,
+      notes: strings,
+      name: strings,
+      box: strings,
+      type: (v) => (Array.isArray(v) ? v.map((t) => (isObject(t) && typeof t.text === "string" ? t.text : "")) : []),
+      // A device's params are the words it draws on screen; its kind, key and anchor are not.
+      devices: (v) => (Array.isArray(v) ? v.flatMap((d) => (isObject(d) ? strings(d.params) : [])) : []),
+    };
     const scan = (where: string, entry: object, id: string | null) => {
       for (const [field, value] of Object.entries(entry)) {
-        const texts = strings(value);
+        const pick = AUTHORED[field];
+        if (!pick) continue;
+        const texts = pick(value);
         for (const { word, re } of patterns) {
           if (texts.some((t) => re.test(t))) {
             problems.push(`${where}${id ? " " : "."}${field} has ${shown(word)}`);
@@ -417,6 +437,17 @@ export function auditBoard(board: Board, analysis: Analysis, options: Options): 
         if (typeof value === "string") {
           const found = value.match(PLACEHOLDER);
           if (found) own(`${key} has ${shown(found[0])}`);
+        } else if (key === "type" && Array.isArray(value)) {
+          // Typed lyrics may hold "todo" (Spanish): there only TODO, TBD and ??? in capitals count.
+          value.forEach((entry, k) => {
+            if (!isObject(entry)) return;
+            for (const [field, v] of Object.entries(entry)) {
+              if (field === "text" && typeof v === "string") {
+                const found = v.match(TYPED_PLACEHOLDER);
+                if (found) own(`type[${k}].text has ${shown(found[0])}`);
+              } else scan(`${q(shot.id)} type[${k}].${field}`, v, shot.id);
+            }
+          });
         } else scan(`${q(shot.id)} ${key}`, value, shot.id);
       }
     }

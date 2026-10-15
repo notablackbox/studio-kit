@@ -114,6 +114,19 @@ test("a sung or motion shot with neither a take nor a plate fails: exit 3, one l
   assert.equal(existsSync(join(dir, "noplate", "edl.json")), false);
 });
 
+test("footage must be a plain file name: a path fails, exit 3", () => {
+  for (const [n, footage] of ["../shot-01.webm", "footage/shot-01.webm", ".."].entries()) {
+    const board = changedBoard(dir, `footage${n}.json`, (_b, shot) => {
+      shot("s003").footage = footage;
+    });
+    const result = film("edl", dir, ARGS(board, "clips", `footage${n}`));
+    assert.equal(result.status, 3, result.stdout + result.stderr);
+    assert.deepEqual(lines(result.stdout), [`edl: "s003" footage ${JSON.stringify(footage)} is not a plain file name`]);
+    assert.deepEqual(report(`footage${n}`).missing, ["s003"]);
+    assert.equal(existsSync(join(dir, `footage${n}`, "edl.json")), false);
+  }
+});
+
 test("a delivered take with no file is no take; a take out of sync from its start falls back to the plate", () => {
   const clips = clipsCopy("clips-odd", (folder) => {
     const w02 = JSON.parse(readFileSync(join(folder, "W02.json"), "utf8"));
