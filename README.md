@@ -710,8 +710,11 @@ is filled from the shot's plate and noted in the report (`fallbacks`, and a
 `fallback: ...` line on stdout): a clip or cover with no delivered take, a
 delivered take with no `file`, or no clip file is `no take`; a sung take that
 diverges with no cover is `no cover`; a take whose `cut_at` is at or before its
-segment's start is `out of sync`; a take that starts more than a frame late is
-`late start` (the plate plays the head); a clip with nothing usable makes the
+segment's start is `out of sync`, and so is a late take whose first frame
+falls due at or after its `cut_at` (none of it would play in sync: it gets no
+segment, the plate plays from the segment's start to the cut and the cover from
+there, or, with no cover, the plate to the shot's end); a take that starts more
+than a frame late is `late start` (the plate plays the head); a clip with nothing usable makes the
 whole shot `{plate}`. A sung or motion shot left with neither a take nor a
 plate (none delivered, or a late start with no plate to fill the head) fails:
 exit 3, one line each, the report written (`failures`: each shot and why) and

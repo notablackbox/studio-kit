@@ -217,6 +217,44 @@ test("a take that starts late (a negative in) plays from its first frame after a
   assert.equal(existsSync(join(dir, "late-noplate", "edl.json")), false);
 });
 
+test("a take whose first frame falls due at or after its cut never plays: the plate to the cut, then the cover, or the plate", () => {
+  // W01's take is 1.5 s late (its first frame falls due at 2.476 s) and diverges 0.2 s into the
+  // shot (cut at 1.176 s): none of it is in sync. The cover's window starts at 0.976 s, so at the
+  // cut it plays from in = 1.176 - 0.976 + 0.2 = 0.4.
+  const clips = clipsCopy("clips-latecut", (folder) => {
+    const w01 = JSON.parse(readFileSync(join(folder, "W01.json"), "utf8"));
+    w01.takes[1].sync.lag_s = -1.5;
+    w01.takes[1].sync.cut_at = 1.176;
+    writeFileSync(join(folder, "W01.json"), JSON.stringify(w01));
+    const c1 = JSON.parse(readFileSync(join(folder, "W01-c1.json"), "utf8"));
+    c1.song_t0 = 0.976;
+    writeFileSync(join(folder, "W01-c1.json"), JSON.stringify(c1));
+  });
+  const result = film("edl", dir, ARGS("shots.json", clips, "latecut"));
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.deepEqual(read("latecut").s002, {
+    segs: [
+      { t0: 0.976, plate: "p-street" },
+      { t0: 1.176, clip: "W01-c1-t1", in: 0.4 },
+    ],
+  });
+  assert.deepEqual(lines(result.stdout).slice(1), ['fallback: "s002" plays plate "p-street" from 0.976 s: clip "W01" is out of sync from its start']);
+  assert.deepEqual(report("latecut").fallbacks, [{ shot: "s002", clip: "W01", at: 0.976, fallback: "out of sync", plate: "p-street" }]);
+
+  // No cover: the plate fills the whole shot from its start.
+  const bare = clipsCopy("clips-latecut-bare", (folder) => {
+    const w01 = JSON.parse(readFileSync(join(folder, "W01.json"), "utf8"));
+    w01.takes[1].sync.lag_s = -1.5;
+    w01.takes[1].sync.cut_at = 1.176;
+    w01.covers = [];
+    writeFileSync(join(folder, "W01.json"), JSON.stringify(w01));
+  });
+  const plain = film("edl", dir, ARGS("shots.json", bare, "latecut-bare"));
+  assert.equal(plain.status, 0, plain.stdout + plain.stderr);
+  assert.deepEqual(read("latecut-bare").s002, { plate: "p-street" });
+  assert.deepEqual(report("latecut-bare").fallbacks, [{ shot: "s002", clip: "W01", at: 0.976, fallback: "out of sync", plate: "p-street" }]);
+});
+
 test("a take is cut at its first divergence, even when the shot ends inside a later in-sync span", () => {
   // W01's take is in sync from 1.0 to 2.0 s, out of sync until 3.0 s, in sync again to 5.0 s;
   // its cut is 2.0. The shot ends at 4.5 s, inside the second span: the take still stops at 2.0

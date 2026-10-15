@@ -10,8 +10,9 @@ import { KEY, readBoard, type Shot } from "./lib/board.ts";
 //   shot runs past the take's `cut_at` (its first divergence) is cut there to its first cover,
 //   which plays from there by its own song_t0 and lag, and so on down the chain;
 // - a hole (a clip or cover with no delivered take with a file, a sung take that diverges with
-//   no cover, or one whose cut is at or before its own start: out of sync) is filled from the
-//   shot's plate, with a note in the report;
+//   no cover, or one whose cut is at or before its own start, or a late take whose first frame
+//   falls due at or after its cut: out of sync) is filled from the shot's plate, up to the cut
+//   when a cover follows, with a note in the report;
 // - a genuine shot with footage is `{footage}`, played like a clip;
 // - a still or 2.5D shot is its plate, or `{design: true}` (pure motion design) with none.
 // A take that starts late (a negative `in`: the take would have to play from before its first
@@ -121,11 +122,18 @@ function resolve(shot: Shot, clips: Map<string, Clip | null>): Resolved {
   const segs: Seg[] = [];
   const spans: [number, number][] = [];
   // A hole from `at` to the shot's end: the plate, noted, or nothing (the shot is missing).
+  // The plate from `at`, unless the plate already plays there (one segment, not two in a row).
+  const plateFrom = (at: number, plate: string) => {
+    const last = segs[segs.length - 1];
+    if (!(last && "plate" in last && last.plate === plate)) segs.push({ t0: r4(at), plate });
+  };
   const hole = (clip: string, at: number, fallback: Fallback["fallback"], why: string): Resolved => {
     if (!shot.plate) return { entry: null, fallbacks, why, spans };
     fallbacks.push({ shot: shot.id, clip, at: r4(at), fallback, plate: shot.plate });
     if (segs.length === 0) return { entry: { plate: shot.plate }, fallbacks, why: null, spans };
-    segs.push({ t0: r4(at), plate: shot.plate });
+    plateFrom(at, shot.plate);
+    // Only the plate after all (an out-of-sync head, then no take): the shot is its plate.
+    if (segs.length === 1 && "plate" in segs[0]) return { entry: { plate: shot.plate }, fallbacks, why: null, spans };
     return { entry: { segs }, fallbacks, why: null, spans };
   };
   let t = shot.t0;
@@ -144,6 +152,8 @@ function resolve(shot: Shot, clips: Map<string, Clip | null>): Resolved {
     const lag = sync?.lag_s ?? 0;
     let at = r4(t - clip.song_t0 + lag);
     let from = t;
+    // Where this take stops: its cut, when the shot runs past it, else the shot's end.
+    const end = cut !== null && cut < shot.t1 - EPS ? cut : shot.t1;
     // Before the take's first frame (a negative lag, or a window cut after the shot's start): the
     // chapter engine would freeze frame 0 for the difference. One frame or less snaps to the first
     // frame; more plays the plate until the take's first frame falls due, or fails without a plate.
@@ -152,14 +162,24 @@ function resolve(shot: Shot, clips: Map<string, Clip | null>): Resolved {
       const late = -at;
       const why = `take ${shown(`${clip.id}-t${take.n}`)} starts ${late.toFixed(3)} s late (in = ${t.toFixed(3)} - song_t0 ${clip.song_t0.toFixed(3)} + lag ${lag.toFixed(3)})`;
       if (!shot.plate) return { entry: null, fallbacks, why, spans };
-      fallbacks.push({ shot: shot.id, clip: clip.id, at: r4(t), fallback: "late start", plate: shot.plate });
-      segs.push({ t0: r4(t), plate: shot.plate });
       from = r4(t + late);
       at = 0;
+      // The first frame falls due at or after the take's cut: none of it plays in sync, so it is
+      // out of sync from here (the hole rule): the plate up to the cut and the cover from there,
+      // or the plate to the shot's end when there is no cover. The take gets no segment.
+      if (end < shot.t1 - EPS && from >= end - EPS) {
+        if (clip.covers.length === 0) return hole(clip.id, t, "out of sync", `clip ${shown(clip.id)} is out of sync from ${t.toFixed(3)} s`);
+        fallbacks.push({ shot: shot.id, clip: clip.id, at: r4(t), fallback: "out of sync", plate: shot.plate });
+        plateFrom(t, shot.plate);
+        t = end;
+        id = clip.covers[0];
+        continue;
+      }
+      fallbacks.push({ shot: shot.id, clip: clip.id, at: r4(t), fallback: "late start", plate: shot.plate });
+      plateFrom(t, shot.plate);
       if (from >= shot.t1 - EPS) break;
     }
     segs.push({ t0: r4(from), clip: `${clip.id}-t${take.n}`, in: at });
-    const end = cut !== null && cut < shot.t1 - EPS ? cut : shot.t1;
     if (sync) for (const [a, b] of sync.synced) spans.push([Math.max(a - SPAN_LEAD, t), Math.min(b, end)]);
     if (end >= shot.t1 - EPS) break;
     if (clip.covers.length === 0) return hole(clip.id, end, "no cover", `clip ${shown(clip.id)} diverges at ${end.toFixed(3)} s and has no cover`);
