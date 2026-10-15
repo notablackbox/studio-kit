@@ -702,7 +702,10 @@ sync hop off) snaps to the take's first frame with no note. A sung take
 whose shot runs past its `sync.cut_at` (the take's first divergence) is cut
 there to its first cover, which plays from there by its own `song_t0` and lag,
 down the chain; this holds even when the shot ends inside a later
-`sync.synced` span, so the out-of-sync stretch between two spans never plays. A `genuine` shot with `footage` is `{footage: "<file>"}` (the file the
+`sync.synced` span, so the out-of-sync stretch between two spans never plays.
+A shot follows at most 16 takes down the chain: where the 16th diverges, the
+next cover is not followed and the plate plays from there, a `chain too long`
+fallback (`fallback: "s002" plays plate "p-street" from 2.500 s: clip "W01-c16" is past the cover chain's 16 takes`). A `genuine` shot with `footage` is `{footage: "<file>"}` (the file the
 walk or a terminal capture recorded; the chapter engine plays it like a clip;
 a footage value that is not a plain file name, with a slash or `..`, fails with
 exit 3: `edl: "s003" footage "../x.webm" is not a plain file name`);
@@ -712,7 +715,10 @@ is filled from the shot's plate and noted in the report (`fallbacks`, and a
 `fallback: ...` line on stdout): a clip or cover with no delivered take, a
 delivered take with no `file`, or no clip file is `no take`; a sung take that
 diverges with no cover is `no cover`; a take whose `cut_at` is at or before its
-segment's start is `out of sync`, and so is a late take whose first frame
+segment's start is `out of sync`, and so is a take with a `diverge_at` inside
+the shot and no `cut_at` (an older sync that found no eighth note before the
+divergence: none of it is in sync on the grid, so the plate from the segment's
+start to the shot's end), and so is a late take whose first frame
 falls due at or after its `cut_at` (none of it would play in sync: it gets no
 segment, the plate plays from the segment's start to the cut and the cover from
 there, or, with no cover, the plate to the shot's end); a take that starts more
@@ -884,7 +890,9 @@ that soundtrack.
   does, while the window still holds voice, diverges at the take's end at the
   latest (`missing_tail_s` in the report). `cut_at` is the last eighth note
   (`beats.json`'s beats and the midpoints between them) at or before
-  `diverge_at`.
+  `diverge_at`; when it diverges before the first eighth, `cut_at` is
+  `--song-t0` (the window's start, the earliest the take plays), so a
+  divergence always has a cut and `film:edl` cuts the take before any of it.
 - Times are song time: `--song-t0` plus the window time. `--song-t0` is the
   clip's `song_t0`: the song time of the window's first sample, which is the
   shot's start (`film:window --song-t0`), not the first word.

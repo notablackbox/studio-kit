@@ -8,9 +8,11 @@ import { KEY, readBoard, type Shot } from "./lib/board.ts";
 // - a sung or motion shot plays its clip's delivered take (the latest `n`) from its start, at
 //   clip time `in = t0 - song_t0 + lag_s` (lag 0 when the take has no sync). A sung take whose
 //   shot runs past the take's `cut_at` (its first divergence) is cut there to its first cover,
-//   which plays from there by its own song_t0 and lag, and so on down the chain;
+//   which plays from there by its own song_t0 and lag, and so on down the chain, at most 16 takes
+//   (past that, the plate from where the 16th diverges: `chain too long`);
 // - a hole (a clip or cover with no delivered take with a file, a sung take that diverges with
-//   no cover, or one whose cut is at or before its own start, or a late take whose first frame
+//   no cover, or one whose cut is at or before its own start, or one that diverges in the shot
+//   with no cut (before the first eighth note), or a late take whose first frame
 //   falls due at or after its cut: out of sync) is filled from the shot's plate, up to the cut
 //   when a cover follows, with a note in the report;
 // - a genuine shot with footage is `{footage}`, played like a clip;
@@ -28,13 +30,14 @@ const WORD_PAD = 0.03; // a sung stretch is each word +/- 30 ms ...
 const WORD_MERGE = 0.12; // ... merged when closer than this
 const SPAN_LEAD = 0.06; // an in-sync span's start, extended back
 const HEAD_SNAP = 1 / 24; // a late start of one frame or less plays from the take's first frame
+const CHAIN = 16; // the most takes one shot plays down its cover chain
 
-type Sync = { lag_s: number; synced: [number, number][]; cut_at: number | null };
+type Sync = { lag_s: number; synced: [number, number][]; diverge_at: number | null; cut_at: number | null };
 type Take = { n: number; status: string; file: string | null; sync: Sync | null };
 type Clip = { id: string; song_t0: number; takes: Take[]; covers: string[] };
 type Seg = { t0: number; clip: string; in: number } | { t0: number; plate: string };
 type Entry = { segs: Seg[] } | { plate: string } | { footage: string } | { design: true };
-type Fallback = { shot: string; clip: string; at: number; fallback: "no take" | "no cover" | "out of sync" | "late start"; plate: string };
+type Fallback = { shot: string; clip: string; at: number; fallback: "no take" | "no cover" | "out of sync" | "late start" | "chain too long"; plate: string };
 
 const r4 = (x: number) => Math.round(x * 10000) / 10000;
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -53,8 +56,14 @@ function parseClip(raw: unknown): Clip | null {
       const synced = s.synced ?? [];
       if (!Array.isArray(synced) || !synced.every((p) => Array.isArray(p) && p.length === 2 && p.every(isNumber))) return null;
       if (s.lag_s != null && !isNumber(s.lag_s)) return null;
+      if (s.diverge_at != null && !isNumber(s.diverge_at)) return null;
       if (s.cut_at != null && !isNumber(s.cut_at)) return null;
-      sync = { lag_s: (s.lag_s as number | undefined) ?? 0, synced: synced as [number, number][], cut_at: (s.cut_at as number | null | undefined) ?? null };
+      sync = {
+        lag_s: (s.lag_s as number | undefined) ?? 0,
+        synced: synced as [number, number][],
+        diverge_at: (s.diverge_at as number | null | undefined) ?? null,
+        cut_at: (s.cut_at as number | null | undefined) ?? null,
+      };
     }
     if (t.file != null && typeof t.file !== "string") return null;
     takes.push({ n: t.n as number, status: t.status, file: (t.file as string | null | undefined) || null, sync });
@@ -138,7 +147,7 @@ function resolve(shot: Shot, clips: Map<string, Clip | null>): Resolved {
   };
   let t = shot.t0;
   let id = shot.clip;
-  for (let guard = 0; guard < 16; guard++) {
+  for (let guard = 0; guard < CHAIN; guard++) {
     const clip = clips.get(id) ?? null;
     const take = delivered(clip);
     if (!take || !clip) return hole(id, t, "no take", `clip ${shown(id)} has no delivered take`);
@@ -146,6 +155,11 @@ function resolve(shot: Shot, clips: Map<string, Clip | null>): Resolved {
     // when the shot ends inside a later in-sync span: the out-of-sync stretch between the spans
     // would otherwise play.
     const sync = take.sync;
+    // A divergence with no cut: sync found no eighth note at or before it (it diverges before the
+    // first grid point), so nothing of the take is in sync on the grid: out of sync from t.
+    if (shot.motion_tier === "sung" && sync && sync.cut_at === null && sync.diverge_at !== null && shot.t1 > sync.diverge_at + EPS) {
+      return hole(clip.id, t, "out of sync", `clip ${shown(clip.id)} diverges at ${sync.diverge_at.toFixed(3)} s, before any cut`);
+    }
     const cut = shot.motion_tier === "sung" && sync && sync.cut_at !== null && shot.t1 > sync.cut_at + EPS ? sync.cut_at : null;
     // Cut at or before its own start: nothing of the take is in sync here.
     if (cut !== null && cut <= t + EPS) return hole(clip.id, t, "out of sync", `clip ${shown(clip.id)} is out of sync from ${t.toFixed(3)} s`);
@@ -177,16 +191,18 @@ function resolve(shot: Shot, clips: Map<string, Clip | null>): Resolved {
       }
       fallbacks.push({ shot: shot.id, clip: clip.id, at: r4(t), fallback: "late start", plate: shot.plate });
       plateFrom(t, shot.plate);
-      if (from >= shot.t1 - EPS) break;
+      if (from >= shot.t1 - EPS) return { entry: { segs }, fallbacks, why: null, spans };
     }
     segs.push({ t0: r4(from), clip: `${clip.id}-t${take.n}`, in: at });
     if (sync) for (const [a, b] of sync.synced) spans.push([Math.max(a - SPAN_LEAD, t), Math.min(b, end)]);
-    if (end >= shot.t1 - EPS) break;
+    if (end >= shot.t1 - EPS) return { entry: { segs }, fallbacks, why: null, spans };
     if (clip.covers.length === 0) return hole(clip.id, end, "no cover", `clip ${shown(clip.id)} diverges at ${end.toFixed(3)} s and has no cover`);
     t = end;
     id = clip.covers[0];
   }
-  return { entry: { segs }, fallbacks, why: null, spans };
+  // The chain is longer than CHAIN takes: the last take played diverges at t, and the cover after
+  // it is not followed, so from t the shot is a hole (the plate, or it fails).
+  return hole(id, t, "chain too long", `the cover chain reaches ${shown(id)} at ${t.toFixed(3)} s, past ${CHAIN} takes`);
 }
 
 // Sung seconds in the shot (words +/- 30 ms, merged under 0.12 s) and those inside in-sync spans.
@@ -300,7 +316,9 @@ async function main(): Promise<number> {
           ? "is out of sync from its start"
           : f.fallback === "late start"
             ? "starts late (its take plays from its first frame when it falls due)"
-            : "diverges and has no cover";
+            : f.fallback === "chain too long"
+              ? `is past the cover chain's ${CHAIN} takes`
+              : "diverges and has no cover";
     console.log(`fallback: ${shown(f.shot)} plays plate ${shown(f.plate)} from ${f.at.toFixed(3)} s: clip ${shown(f.clip)} ${why}`);
   }
   return EXIT.done;

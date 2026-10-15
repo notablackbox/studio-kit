@@ -295,6 +295,63 @@ test("a take is cut at its first divergence, even when the shot ends inside a la
   });
 });
 
+test("a cover chain past 16 takes is a hole where the last followed take diverges", () => {
+  // W01 is cut at 1.0 s; each of 17 covers W01-c1 .. W01-c17 starts at the cut before it and is cut
+  // 0.1 s later. The shot follows 16 takes (W01 and c1 .. c15); c15 diverges at 2.5 s, where the
+  // chain would go on to c16: from there the plate plays, never c15 past its divergence.
+  const clips = clipsCopy("clips-chain", (folder) => {
+    const w01 = JSON.parse(readFileSync(join(folder, "W01.json"), "utf8"));
+    w01.takes[1].sync = { lag_s: 0, synced: [], diverge_at: 1.0, cut_at: 1.0 };
+    w01.covers = ["W01-c1"];
+    writeFileSync(join(folder, "W01.json"), JSON.stringify(w01));
+    const base = JSON.parse(readFileSync(join(folder, "W01-c1.json"), "utf8"));
+    for (let n = 1; n <= 17; n++) {
+      const start = Math.round((1.0 + 0.1 * (n - 1)) * 10) / 10;
+      const cut = Math.round((start + 0.1) * 10) / 10;
+      const cover = {
+        ...base,
+        id: `W01-c${n}`,
+        song_t0: start,
+        takes: [{ n: 1, status: "delivered", file: `clips/W01-c${n}/take-1.mp4`, sync: { lag_s: 0, synced: [], diverge_at: cut, cut_at: cut } }],
+        covers: n < 17 ? [`W01-c${n + 1}`] : [],
+      };
+      writeFileSync(join(folder, `W01-c${n}.json`), JSON.stringify(cover));
+    }
+  });
+  const result = film("edl", dir, ARGS("shots.json", clips, "chain"));
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const segs = read("chain").s002.segs;
+  assert.equal(segs.length, 17, JSON.stringify(segs));
+  assert.deepEqual(segs[0], { t0: 0.976, clip: "W01-t2", in: 0 });
+  assert.deepEqual(segs[15], { t0: 2.4, clip: "W01-c15-t1", in: 0 });
+  assert.deepEqual(segs[16], { t0: 2.5, plate: "p-street" });
+  assert.ok(!segs.some((s: { clip?: string }) => s.clip === "W01-c16-t1"));
+  assert.deepEqual(report("chain").fallbacks, [{ shot: "s002", clip: "W01-c16", at: 2.5, fallback: "chain too long", plate: "p-street" }]);
+  assert.deepEqual(lines(result.stdout).slice(1), ['fallback: "s002" plays plate "p-street" from 2.500 s: clip "W01-c16" is past the cover chain\'s 16 takes']);
+});
+
+test("a divergence with no cut (before the first eighth) is out of sync from the shot's start: the plate, or exit 3", () => {
+  // film:sync gives cut_at null when no eighth note is at or before the divergence.
+  const clips = clipsCopy("clips-early", (folder) => {
+    const w01 = JSON.parse(readFileSync(join(folder, "W01.json"), "utf8"));
+    w01.takes[1].sync.diverge_at = 0.1;
+    w01.takes[1].sync.cut_at = null;
+    writeFileSync(join(folder, "W01.json"), JSON.stringify(w01));
+  });
+  const result = film("edl", dir, ARGS("shots.json", clips, "early"));
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.deepEqual(read("early").s002, { plate: "p-street" });
+  assert.deepEqual(report("early").fallbacks, [{ shot: "s002", clip: "W01", at: 0.976, fallback: "out of sync", plate: "p-street" }]);
+  assert.equal(lines(result.stdout)[1], 'fallback: "s002" plays plate "p-street" from 0.976 s: clip "W01" is out of sync from its start');
+  // No plate: the shot fails.
+  const board = changedBoard(dir, "early-noplate.json", (_b, shot) => {
+    shot("s002").plate = null;
+  });
+  const failed = film("edl", dir, ARGS(board, clips, "early-noplate"));
+  assert.equal(failed.status, 3, failed.stdout + failed.stderr);
+  assert.deepEqual(lines(failed.stdout), ['edl: "s002" has neither a take nor a plate (clip "W01" diverges at 0.100 s, before any cut)']);
+});
+
 test("refusals: one line each on stdout, exit 2, nothing written", () => {
   writeFileSync(join(dir, "afile"), "x");
   const broken = clipsCopy("clips-broken", (folder) => writeFileSync(join(folder, "W02.json"), '{"id": "W02", "takes": "none"}'));

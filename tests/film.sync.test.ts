@@ -163,6 +163,17 @@ test("the window with white noise after 2 s: it diverges at about 2.0, cut on an
   assert.match(lines(result.stdout)[0], new RegExp(`diverges at ${diverge.toFixed(2)}, cut at ${cut.toFixed(2)}$`));
 });
 
+test("the cut: the last eighth at or before the divergence, the window's start before the first eighth", async () => {
+  const { cutFor } = await import("../src/film/sync.ts");
+  const grid = [1, 2, 3];
+  assert.equal(cutFor(grid, null, 0.5), null);
+  assert.equal(cutFor(grid, 2.7, 0.5), 2.5);
+  assert.equal(cutFor(grid, 2, 0.5), 2);
+  // Diverges at 0.6 s, before the first eighth (1 s): cut at the window's start, never null,
+  // so film:edl never reads a divergence as no divergence.
+  assert.equal(cutFor(grid, 0.6, 0.5), 0.5);
+});
+
 test("a take that does not copy the window is diverged: exit 3, one line, the report written", () => {
   const result = film("sync", dir, SYNC(writeWav("other.wav", noise(window.length, 99)), "other"));
   assert.equal(result.status, 3, result.stdout + result.stderr);

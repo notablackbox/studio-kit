@@ -10,7 +10,7 @@ import type { RunResult } from "../render.ts";
 // with ffmpeg from an MP4, or a WAV) is compared with the window: the global lag within 1 s,
 // the take's NCC (a copy over 0.2, else it re-sang), the in-sync spans, where it diverges, and
 // the cut on the last eighth note (the beats of beats.json and their midpoints) at or before
-// the divergence. Times are song time: song time = --song-t0 + clip time - lag. Writes
+// the divergence (the window's start when it diverges before the first eighth). Times are song time: song time = --song-t0 + clip time - lag. Writes
 // <take>-sync.png (both spectrograms and the NCC curve) and sync-report.json, whose `sync` is
 // the take's sync entry in its clip file. A take that does not copy the window is exit 3.
 
@@ -64,6 +64,14 @@ export function eighths(beats: number[]): number[] {
   return beats.flatMap((b, i) => (i + 1 < beats.length ? [b, (b + beats[i + 1]) / 2] : [b]));
 }
 
+// The cut for a divergence: the last eighth note at or before it; when it diverges before the
+// first eighth, the window's start (song time --song-t0, the earliest the take plays), so the
+// take is cut before any of it plays rather than left with no cut. No divergence, no cut.
+export function cutFor(beats: number[], divergeAt: number | null, songT0: number): number | null {
+  if (divergeAt === null) return null;
+  return eighths(beats).filter((e) => e <= divergeAt + 1e-9).at(-1) ?? songT0;
+}
+
 async function main(): Promise<number> {
   const { values } = parseFlags(COMMAND, {
     take: { type: "string" },
@@ -103,14 +111,14 @@ async function main(): Promise<number> {
     const song = (w: number) => r(songT0 + w);
     const mode = measured.ncc > THRESHOLD ? "copy" : "diverged";
     const divergeAt = measured.diverge_at === null ? null : song(measured.diverge_at);
-    const cut = divergeAt === null ? undefined : eighths(beats).filter((e) => e <= divergeAt + 1e-9).at(-1);
+    const cut = cutFor(beats, divergeAt, songT0);
     const sync = {
       lag_s: measured.lag_s,
       ncc: measured.ncc,
       mode,
       synced: measured.synced.map(([a, b]) => [song(a), song(b)]),
       diverge_at: divergeAt,
-      cut_at: cut === undefined ? null : r(cut),
+      cut_at: cut === null ? null : r(cut),
     };
 
     writeIn(out, png, readFileSync(join(temp, measured.png)));
