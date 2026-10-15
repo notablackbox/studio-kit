@@ -136,6 +136,30 @@ test("a window that starts or ends inside a word, or leaves a phrase's word outs
   assert.equal(existsSync(join(dir, "x")), false);
 });
 
+test("without --from/--to, every word between the first and last chosen must lie inside the window too", () => {
+  const w = truth.words;
+  const span = (i: number, words = w) => `(${words[i].start.toFixed(2)} to ${words[i].end.toFixed(2)})`;
+  const t0 = r4(w[0].start - 0.024);
+  // A window ending inside the last word chosen by its start (word 6) is refused naming it.
+  const length = r4((w[6].start + w[6].end) / 2 - t0);
+  const end = film("window", dir, ["--vocals", "vocals.wav", "--words", "words.json", "--song-t0", String(t0), "--duration", String(length), "--out", "auto-end"]);
+  assert.equal(end.status, 2, end.stdout + end.stderr);
+  assert.deepEqual(lines(end.stdout), [`the window ends at ${(t0 + length).toFixed(2)} s inside word 6 "windows" ${span(6)}: end it in a word gap`]);
+  assert.equal(existsSync(join(dir, "auto-end")), false);
+
+  // A words.json out of time order: word 3 sits after word 9, so it is not chosen by its start,
+  // but it falls between the first and last chosen (0 and 6) and lies outside the window.
+  const moved = w.map((x) => ({ ...x }));
+  moved[3] = { ...moved[3], start: r4(w[9].end + 0.5), end: r4(w[9].end + 0.8) };
+  const data = JSON.parse(readFileSync(join(dir, "words.json"), "utf8"));
+  data.words[3] = { ...data.words[3], t0: moved[3].start, t1: moved[3].end };
+  writeFileSync(join(dir, "unordered.json"), JSON.stringify(data));
+  const result = film("window", dir, ["--vocals", "vocals.wav", "--words", "unordered.json", "--song-t0", String(t0), "--duration", "5", "--out", "auto-order"]);
+  assert.equal(result.status, 2, result.stdout + result.stderr);
+  assert.deepEqual(lines(result.stdout), [`word 3 ${JSON.stringify(w[3].word)} ${span(3, moved)} is outside the window (${t0.toFixed(2)} to ${(t0 + 5).toFixed(2)} s)`]);
+  assert.equal(existsSync(join(dir, "auto-order")), false);
+});
+
 test("a duration under 4 s or over 8 s is refused with its length", () => {
   const t0 = String(r4(truth.words[7].start - 0.05));
   const short = film("window", dir, ["--vocals", "vocals.wav", "--words", "words.json", "--song-t0", t0, "--duration", "1.4", "--out", "x"]);

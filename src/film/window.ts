@@ -283,14 +283,17 @@ async function main(): Promise<number> {
   if (given) {
     from = Number(values.from);
     to = Number(values.to);
-    const outside = words.slice(from, to + 1).filter((w) => w.t0 < songT0 - EPS || w.t1 > windowEnd + EPS);
-    if (outside.length > 0) throw new Refused(outside.map((w) => `word ${span(w)} is outside the window ${where}`));
   } else {
     const starting = words.filter((w) => w.t0 >= songT0 - START_SLACK - EPS && w.t0 < windowEnd - END_SLACK - EPS);
     if (starting.length === 0) throw new Refused([`no word starts inside the window ${where}`]);
     from = starting[0].i;
     to = starting.at(-1)!.i;
   }
+  // Given or derived, every word from --from to --to lies inside the window, start and end: a
+  // derived word chosen by its start is refused here too if it ends past the window (or, in a
+  // words.json out of time order, lies elsewhere), never cut short.
+  const outside = words.slice(from, to + 1).filter((w) => w.t0 < songT0 - EPS || w.t1 > windowEnd + EPS);
+  if (outside.length > 0) throw new Refused(outside.map((w) => `word ${span(w)} is outside the window ${where}`));
   const name = values.name ?? `window-${from}-${to}`;
   const out = fromCaller(values.out);
   const problem = outProblem(out);

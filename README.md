@@ -577,7 +577,11 @@ voice. The phrase's words are `--from` to `--to` (both or neither), or, without
 them, the words that start inside `[song_t0 - 0.02, song_t0 + duration - 0.08)`.
 Refused (exit 2) with the word named: a window that starts or ends inside a
 word (`the window starts at 1.16 s inside word 0 "the" (1.00 to 1.31): start it in a word gap`),
-a word of `--from`/`--to` outside the window, and a window no word starts in.
+a phrase word outside the window, and a window no word starts in. The phrase
+words are every word from the first to the last index, given or derived, and each
+must lie wholly inside the window: a derived word chosen by its start is never
+cut short at the window's end, and in a `words.json` out of time order a word
+between the first and last chosen that lies elsewhere is refused by name too.
 A window reaching past the decoded stem's end (more than 1 ms, for rounding) is
 refused too, naming both ends (`the window ends at 12.900 s, past the end of --vocals at 12.000 s`):
 the missing samples would otherwise be zero-filled silence. Words are merged into phrases across gaps of 0.35 s or less; each phrase is
@@ -1397,7 +1401,7 @@ they need (`htdemucs` for stems; `mms_fa` and `whisper_tiny` for words).
 - `--words is not a words.json`
 - `the window starts at 1.16 s inside word 0 "the" (1.00 to 1.31): start it in a word gap`,
   `the window ends at 5.04 s inside word 6 "windows" (4.73 to 5.35): end it in a word gap`
-- one line per phrase word outside the window:
+- one line per phrase word outside the window, with or without `--from`/`--to`:
   `word 0 "the" (1.00 to 1.31) is outside the window (2.63 to 6.63 s)`
 - `no word starts inside the window (10.60 to 15.60 s)`
 - `the window ends at 12.900 s, past the end of --vocals at 12.000 s`: the
