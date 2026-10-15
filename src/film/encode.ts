@@ -1,6 +1,6 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { EXIT, Refused, Unexpected, fromCaller, isMain, outProblem, parseFlags, requireFile, run, shown, writeIn, writeReport } from "./lib/cli.ts";
 import { RENDER_TIMEOUT, audioSeconds, moveIn, must, probeVideo, type VideoProbe } from "./lib/media.ts";
 
@@ -10,12 +10,35 @@ import { RENDER_TIMEOUT, audioSeconds, moveIn, must, probeVideo, type VideoProbe
 // transfer, matrix; an untagged stream looks washed out in QuickTime), and `review.mp4` at
 // CRF 20 capped at 8 Mb/s. Both are read back with ffprobe: the duration must equal the
 // chapters' sum within 0.5 s, the three BT.709 tags must be there, and the rate 24 fps; a file
-// that does not measure up is a failure of the encode (exit 1).
+// that does not measure up is a failure of the encode (exit 1): nothing caps the length, so an
+// overrun shows as well as a shortfall. Refused: a mix shorter than the chapters, and a chapter
+// whose report (chapter-report.json or reframe-report.json beside it) says `ramp: false` (the
+// test-only --no-ramp) unless --allow-unramped.
 
 const COMMAND = "film:encode";
 const FPS = 24;
 
 const tags = ["-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709", "-color_range", "tv"];
+
+// The `ramp` a chapter's own report records, when a film:chapter or film:reframe report beside
+// it names this video; undefined when there is none.
+function unramped(file: string): boolean | undefined {
+  let names: string[] = [];
+  try {
+    names = readdirSync(dirname(file)).filter((n) => n === "chapter-report.json" || n === "reframe-report.json");
+  } catch {
+    return undefined;
+  }
+  for (const name of names) {
+    try {
+      const report = JSON.parse(readFileSync(join(dirname(file), name), "utf8"));
+      if (report?.outputs?.video === basename(file)) return report.ramp === false;
+    } catch {
+      // not a report this command reads
+    }
+  }
+  return undefined;
+}
 
 function check(name: string, p: VideoProbe | null, want: { duration: number; width: number; height: number }): string[] {
   if (!p) return [`${name} cannot be read back`];
@@ -32,7 +55,12 @@ function check(name: string, p: VideoProbe | null, want: { duration: number; wid
 }
 
 async function main(): Promise<number> {
-  const { values, positionals } = parseFlags(COMMAND, { chapters: { type: "string", multiple: true }, mix: { type: "string" }, out: { type: "string" } }, process.argv.slice(2), true);
+  const { values, positionals } = parseFlags(
+    COMMAND,
+    { chapters: { type: "string", multiple: true }, mix: { type: "string" }, out: { type: "string" }, "allow-unramped": { type: "boolean" } },
+    process.argv.slice(2),
+    true,
+  );
   const chapters = [...(values.chapters ?? []), ...positionals].map(fromCaller);
   if (chapters.length === 0 || !values.mix || !values.out) throw new Refused([`${COMMAND}: --chapters <mp4>..., --mix and --out are required`]);
   const problems: string[] = [];
@@ -50,9 +78,17 @@ async function main(): Promise<number> {
       if (p.fps !== FPS) problems.push(`--chapters: ${shown(chapters[k].split("/").pop())} runs at ${p.fps} fps, want ${FPS}`);
     });
   }
+  for (const file of chapters) {
+    if (values["allow-unramped"] || unramped(file) !== true) continue;
+    problems.push(`--chapters: ${shown(basename(file))} was rendered with --no-ramp (its report says ramp: false); give --allow-unramped to encode it anyway`);
+  }
   const mix = requireFile(fromCaller(values.mix), "--mix");
   const mixSeconds = await audioSeconds(mix);
   if (mixSeconds === null) problems.push("--mix cannot be read as audio");
+  const sum = probes.reduce((s, p) => s + p.duration, 0);
+  if (mixSeconds !== null && probes.length === chapters.length && mixSeconds < sum - 1 / FPS) {
+    problems.push(`--mix runs ${mixSeconds.toFixed(3)} s, shorter than the chapters (${sum.toFixed(3)} s)`);
+  }
   const out = fromCaller(values.out);
   const issue = outProblem(out);
   if (issue) problems.push(issue);
@@ -66,7 +102,7 @@ async function main(): Promise<number> {
     const list = chapters.map((f) => `file '${f.replace(/'/g, "'\\''")}'`).join("\n") + "\n";
     writeIn(temp, "chapters.txt", list);
     const vf = "scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int,format=yuv420p,setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv";
-    const common = ["-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", join(temp, "chapters.txt"), "-i", mix, "-map", "0:v:0", "-map", "1:a:0", "-t", total.toFixed(3), "-vf", vf, "-r", String(FPS), "-c:v", "libx264", "-pix_fmt", "yuv420p", ...tags, "-c:a", "aac", "-b:a", "256k", "-ac", "2", "-movflags", "+faststart"];
+    const common = ["-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", join(temp, "chapters.txt"), "-i", mix, "-map", "0:v:0", "-map", "1:a:0", "-vf", vf, "-r", String(FPS), "-c:v", "libx264", "-pix_fmt", "yuv420p", ...tags, "-c:a", "aac", "-b:a", "256k", "-ac", "2", "-movflags", "+faststart"];
     const encoded: Record<string, VideoProbe> = {};
     for (const [name, rate] of [["master.mp4", ["-crf", "16", "-preset", "slow"]], ["review.mp4", ["-crf", "20", "-preset", "slow", "-maxrate", "8M", "-bufsize", "16M"]]] as const) {
       const file = join(temp, name);
@@ -80,7 +116,7 @@ async function main(): Promise<number> {
     const view = (p: VideoProbe) => ({ duration: p.duration, size: p.size, width: p.width, height: p.height, fps: p.fps, codec: p.codec, pix_fmt: p.pix_fmt, color_primaries: p.color_primaries, color_transfer: p.color_transfer, color_space: p.color_space, audio: p.audio });
     writeReport(out, "encode", {
       ok: true,
-      inputs: { chapters, mix },
+      inputs: { chapters, mix, allow_unramped: values["allow-unramped"] === true },
       outputs: { master: "master.mp4", review: "review.mp4", report: "encode-report.json" },
       chapters: chapters.map((f, k) => ({ file: f, duration: probes[k].duration })),
       chapters_seconds: Math.round(total * 1000) / 1000,

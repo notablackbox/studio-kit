@@ -207,3 +207,50 @@ test("a type entry that does not consume its line's sung words, and a 2.5D shot 
     '--board: "s005" is plate3d and needs a treatment (one of push, drift, parallax-left, parallax-right, rise, settle)',
   ]);
 });
+
+const problemsOf = (board: unknown, extra: Partial<Parameters<typeof buildPlan>[0]> = {}) =>
+  buildPlan({
+    chapter: "ch01", board, edl: EDL, words: analysis("words.json"), beats: analysis("beats.json"), hits: analysis("hits.json"),
+    display: readFileSync(join(boardFixture, "analysis", "display.txt"), "utf8"), palette, media: MEDIA, ...extra,
+  }).problems;
+
+test("I8: a lyric block lays out its whole line from its first frame; unsung tokens are hidden and not in the sidecar", () => {
+  const p = plan();
+  const s = frameState(p, 24); // "The" is sung; "city" and "wakes." are not yet
+  const block = s.blocks[0];
+  assert.deepEqual(block.tokens.map((t) => [t.text, t.drawn, t.shown]), [["The", true, 1], ["city", false, 0], ["wakes.", false, 0]]);
+  assert.deepEqual(s.tokens, [{ word: 0, text: "The" }]);
+  // Hidden tokens never take the accent.
+  assert.ok(block.tokens.filter((t) => !t.drawn).every((t) => !t.accent));
+});
+
+test("I7: a coverline or masthead that cannot fit at its floor is refused, naming the shot", () => {
+  const long = "The city WAKES-AND-EVERY-SINGLE-WINDOW-ON-THE-BLOCK-IS-LIT-UP";
+  assert.equal(long.length, 61);
+  const board = structuredClone(CHAPTER_BOARD) as typeof CHAPTER_BOARD;
+  board.shots[1].type[0] = { line: 0, mode: "coverline", text: long, placement: "left" };
+  assert.deepEqual(problemsOf(board), [`--board: "s002" type[0] coverline "${long}" does not fit one line at 56 px (16:9)`]);
+  const mast = structuredClone(CHAPTER_BOARD) as typeof CHAPTER_BOARD;
+  mast.shots[5].type[0].text = "HOLD THE LIGHTHOUSEKEEPERSDAUGHTERSWEDDINGANNOUNCEMENTSCOLUMNS";
+  assert.deepEqual(problemsOf(mast, { vertical: true }), [
+    `--board: "s006" type[0] masthead "HOLD THE LIGHTHOUSEKEEPERSDAUGHTERSWEDDINGANNOUNCEMENTSCOLUMNS" does not fit two lines at 97 px (9:16)`,
+  ]);
+  // The test chapter's own type fits both shapes.
+  assert.deepEqual(problemsOf(CHAPTER_BOARD), []);
+  assert.deepEqual(problemsOf(CHAPTER_BOARD, { vertical: true }), []);
+});
+
+test("9:16: a shot's devices step down together to fit the band above the picture, or are refused", () => {
+  const p = plan(CHAPTER_BOARD, { vertical: true });
+  assert.equal(p.shots[1].deviceScale, 1); // a label and a counter fit at full size
+  const board = structuredClone(CHAPTER_BOARD) as typeof CHAPTER_BOARD;
+  const chart = { kind: "chart", anchor: { slot: "right" }, params: { series: [1, 2, 3] }, key: "B", line: null };
+  board.shots[1].devices.push(chart as never);
+  const scaled = plan(board, { vertical: true });
+  assert.ok(scaled.shots[1].deviceScale < 1 && scaled.shots[1].deviceScale >= 0.6, String(scaled.shots[1].deviceScale));
+  assert.equal(frameState(scaled, 80).deviceScale, scaled.shots[1].deviceScale);
+  // 16:9 is not stepped down.
+  assert.equal(plan(board).shots[1].deviceScale, 1);
+  board.shots[1].devices.push(chart as never, chart as never);
+  assert.deepEqual(problemsOf(board, { vertical: true }), ['--board: "s002" devices need 1216 px above the 9:16 picture, the band has 518 (they would shrink under 60 percent)']);
+});

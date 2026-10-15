@@ -8,6 +8,8 @@
 // No React, no DOM, no node: this file is bundled for the browser and imported by the commands.
 // Nothing here keeps state between calls: no Math.random, no clock, no module-level variable.
 
+import { DEVICE_GAP, MIN_DEVICE_SCALE, deviceHeight, fitFace, geometry } from "./geometry.ts";
+
 export const FILM_FPS = 24;
 export const DITHER_FRAMES = 12; // R4
 export const RAMP_FRAMES = 3; // R4: a full-frame luminance change ramps over at least three frames
@@ -154,6 +156,7 @@ export type PlanShot = {
   chromeOff: boolean;
   accent: string;
   design: boolean;
+  deviceScale: number; // 9:16: the shot's devices stepped down together to fit the band above the picture
 };
 export type Plan = {
   version: 1;
@@ -170,6 +173,7 @@ export type Plan = {
   downbeats: number[];
   palette: Palette;
   ramp: boolean;
+  vertical: boolean;
   words: { i: number; line: number; t0: number; t1: number }[];
 };
 
@@ -192,6 +196,7 @@ export type PlanInputs = {
   palette: unknown;
   media: Media;
   ramp?: boolean;
+  vertical?: boolean; // the shape rendered: the type and the devices are checked against it
 };
 
 type Obj = Record<string, unknown>;
@@ -245,6 +250,7 @@ export function buildPlan(input: PlanInputs): { plan: Plan | null; problems: str
     .filter((x): x is number => x !== null)
     .sort((a, b) => a - b);
   const display = lyricLines(input.display);
+  const shape = geometry(input.vertical === true);
   const duration = num(board.duration) ?? 0;
 
   const chapters = (Array.isArray(board.chapters) ? board.chapters : []).filter(isObj);
@@ -368,6 +374,19 @@ export function buildPlan(input: PlanInputs): { plan: Plan | null; problems: str
       const first = Math.min(...tokens.map((t) => t.at));
       blocks.push({ mode, line, text, tokens, from: Math.max(from, frameAt(first)), to, cps: CPS.base, placement });
     });
+    // A card's or a coverline's type must fit the frame at its floor size, so no token the
+    // sidecar lists is ever drawn off the frame.
+    types.forEach((entry, n) => {
+      const mode = str(entry.mode);
+      if (mode !== "coverline" && mode !== "masthead" && mode !== "mass") return;
+      const text = plainText(str(entry.text) ?? "");
+      const size = mode === "coverline" ? shape.sizes.coverline : shape.sizes.masthead;
+      const face = mode === "coverline" ? "text" : "headline";
+      const fit = fitFace(mode === "coverline" ? text : text.toUpperCase(), face, size.min, size.min, shape.text, size.lines);
+      if (fit.lines > size.lines) {
+        report(`--board: ${q(id)} type[${n}] ${mode} ${q(text)} does not fit ${size.lines === 1 ? "one line" : "two lines"} at ${size.min} px (${shape.vertical ? "9:16" : "16:9"})`);
+      }
+    });
     const lyric = blocks.filter((b) => b.line !== null).sort((a, b) => a.from - b.from);
     for (let i = 0; i + 1 < lyric.length; i++) lyric[i].to = Math.max(lyric[i].from, lyric[i + 1].from);
     for (const b of blocks) b.cps = typingSpeed(b);
@@ -402,6 +421,14 @@ export function buildPlan(input: PlanInputs): { plan: Plan | null; problems: str
       devices.push({ kind, key, at: r4(at), from: Math.max(from, frameAt(at)), to, anchor, params, line });
     });
 
+    // 9:16: the shot's devices stack in the band above the picture, stepped down together
+    // (never clipped); below 60 percent they are refused.
+    let deviceScale = 1;
+    if (shape.vertical && devices.length > 0) {
+      const need = devices.reduce((sum, d) => sum + deviceHeight(d.kind, d.params), 0) + DEVICE_GAP * (devices.length - 1);
+      deviceScale = Math.min(1, shape.above.h / need);
+      if (deviceScale < MIN_DEVICE_SCALE) report(`--board: ${q(id)} devices need ${need} px above the 9:16 picture, the band has ${shape.above.h} (they would shrink under ${MIN_DEVICE_SCALE * 100} percent)`);
+    }
     const wanted = str(s.accent) ?? chapterAccent;
     const accent = palette ? (wanted && hexes.some((h) => h.toLowerCase() === wanted.toLowerCase()) ? wanted : palette.accent) : "#000000";
     shots.push({
@@ -418,6 +445,7 @@ export function buildPlan(input: PlanInputs): { plan: Plan | null; problems: str
       chromeOff: typeof s.chrome === "string" && s.chrome.trim().toLowerCase() === "off",
       accent,
       design,
+      deviceScale: r4(deviceScale),
     });
   }
 
@@ -452,6 +480,7 @@ export function buildPlan(input: PlanInputs): { plan: Plan | null; problems: str
       downbeats,
       palette,
       ramp: input.ramp !== false,
+      vertical: input.vertical === true,
       words,
     },
     problems,
@@ -475,7 +504,8 @@ function typingSpeed(b: Block): number {
 // ---------------------------------------------------------------------------------------------
 // One frame.
 
-export type DrawnToken = { text: string; words: number[]; shown: number; mark: Mark; scale: number; accent: boolean; spacing: number };
+// `drawn` false: the token is laid out (so the line never moves) but hidden, and not in the sidecar.
+export type DrawnToken = { text: string; words: number[]; shown: number; drawn: boolean; mark: Mark; scale: number; accent: boolean; spacing: number };
 export type DrawnBlock = { mode: TypeMode; line: number | null; placement: string | null; tokens: DrawnToken[]; text: string };
 export type DrawnDevice = { kind: DeviceKind; anchor: Anchor; params: Record<string, unknown>; step: number; age: number; accent: boolean; index: number };
 export type Layer =
@@ -504,6 +534,7 @@ export type FrameState = {
   chrome: { session: string; bar: number; beat: number } | null;
   tokens: { word: number; text: string }[]; // the tokens drawn on this frame (R1)
   accent: string;
+  deviceScale: number;
 };
 
 const ease = (u: number) => u * u * (3 - 2 * u);
@@ -601,6 +632,7 @@ export function frameState(plan: Plan, frame: number): FrameState {
     chrome: null,
     tokens: [],
     accent: shot?.accent ?? plan.palette.accent,
+    deviceScale: shot?.deviceScale ?? 1,
   };
   if (!shot) return state;
 
@@ -626,7 +658,10 @@ export function frameState(plan: Plan, frame: number): FrameState {
     const tokens: DrawnToken[] = [];
     for (const tok of b.tokens) {
       const appear = Math.max(b.from, frameAt(tok.at));
-      if (song < appear) continue;
+      if (song < appear) {
+        tokens.push({ text: tok.text, words: tok.words, shown: 0, drawn: false, mark: tok.mark, scale: 1, accent: false, spacing: 0 });
+        continue;
+      }
       const since = song - appear;
       let shown = tok.text.length;
       if (typed && t < deadline - 1e-9) shown = Math.min(tok.text.length, 1 + Math.floor((since / FILM_FPS) * b.cps + 1e-9));
@@ -640,6 +675,7 @@ export function frameState(plan: Plan, frame: number): FrameState {
         text: tok.text,
         words: tok.words,
         shown,
+        drawn: true,
         mark: tok.mark,
         scale: r4(1 + 0.2 * slam),
         accent: wantsAccent ? takeAccent() : false,
@@ -647,7 +683,7 @@ export function frameState(plan: Plan, frame: number): FrameState {
       });
       for (const i of tok.words) state.tokens.push({ word: i, text: tok.text });
     }
-    if (tokens.length > 0 || b.line === null) state.blocks.push({ mode: b.mode, line: b.line, placement: b.placement, tokens, text: b.text });
+    if (tokens.some((x) => x.drawn) || b.line === null) state.blocks.push({ mode: b.mode, line: b.line, placement: b.placement, tokens, text: b.text });
   }
 
   shot.devices.forEach((d, index) => {

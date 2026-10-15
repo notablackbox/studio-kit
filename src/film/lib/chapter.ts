@@ -2,7 +2,7 @@ import { copyFileSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathS
 import { tmpdir } from "node:os";
 import { dirname, extname, join, sep } from "node:path";
 import { KIT_ROOT, Refused, fromCaller, outProblem, requireFile, shown } from "./cli.ts";
-import { readBoard } from "./board.ts";
+import { KEY, readBoard } from "./board.ts";
 import { must, probeVideo } from "./media.ts";
 import { FONT_FILES } from "../../remotion/film/fonts.ts";
 import { buildPlan, frameAt, takeOf, type Media, type Plan } from "../../remotion/film/plan.ts";
@@ -84,7 +84,11 @@ const isFile = (path: string) => {
 };
 
 // Reads and checks a chapter's inputs; throws Refused before any work.
-export function prepareChapter(command: string, values: ChapterValues, required: string[] = []): Prepared {
+export function prepareChapter(command: string, values: ChapterValues, options: { required?: string[]; vertical?: boolean } = {}): Prepared {
+  const required = options.required ?? [];
+  const vertical = options.vertical === true;
+  // R-c: cards that switch in one frame exist only to prove the flash check fails.
+  if (values["no-ramp"] && process.env.FILM_TEST !== "1") throw new Refused(["--no-ramp is for the kit's tests only (FILM_TEST=1)"]);
   const need = ["board", "edl", "words", "beats", "hits", "display", "plates", "clips", "chapter", "out", ...required];
   const missing = need.filter((k) => !values[k as keyof ChapterValues]);
   if (missing.length > 0) throw new Refused([`${command}: ${need.map((k) => `--${k}`).join(", ")} are required (missing ${missing.map((k) => `--${k}`).join(", ")})`]);
@@ -119,9 +123,20 @@ export function prepareChapter(command: string, values: ChapterValues, required:
   const firstIn = shots.findIndex((s) => s.t1 > chapter.t0 + 1e-6 && s.t0 < chapter.t1 - 1e-6);
   const wanted = shots.filter((s, k) => (s.t1 > chapter.t0 + 1e-6 && s.t0 < chapter.t1 - 1e-6) || (firstIn > 0 && k === firstIn - 1));
   const media: Media = { plates: {}, layers: {}, clips: {}, footage: {}, frames: {} };
+  const flagged = new Set<string>();
+  const flag = (id: string, line: string) => {
+    flagged.add(id);
+    problems.push(line);
+  };
   const sources: Prepared["sources"] = [];
   const layers: Prepared["layers"] = [];
   const realFootage = footageDir ? realpathSync(footageDir) : null;
+  // Every key from the edit list names a file: checked with the board's KEY before any path is built.
+  const plateKey = (id: string, key: string): boolean => {
+    if (KEY.test(key)) return true;
+    flag(id, `--edl: ${shown(id)} names plate ${shown(key)}, which is not a plate key`);
+    return false;
+  };
   const addPlate = (key: string, needLayers: boolean) => {
     const found = PLATE_EXT.map((ext) => join(platesDir, `${key}${ext}`)).find(isFile);
     if (!found) return; // the plan names the missing plate
@@ -138,20 +153,15 @@ export function prepareChapter(command: string, values: ChapterValues, required:
     }
   };
   let footageCount = 0;
-  const flagged = new Set<string>();
-  const flag = (id: string, line: string) => {
-    flagged.add(id);
-    problems.push(line);
-  };
   for (const shot of wanted) {
     const entry = edl[shot.id];
     if (!isObj(entry)) continue;
     if (Array.isArray(entry.segs)) {
       for (const seg of entry.segs.filter(isObj)) {
-        if (typeof seg.plate === "string") addPlate(seg.plate, false);
+        if (typeof seg.plate === "string" && plateKey(shot.id, seg.plate)) addPlate(seg.plate, false);
         if (typeof seg.clip === "string") {
           const take = takeOf(seg.clip);
-          if (!take) {
+          if (!take || !KEY.test(take.clip)) {
             flag(shot.id, `--edl: ${shown(shot.id)} names take ${shown(seg.clip)}, which is not <clip>-t<n>`);
             continue;
           }
@@ -162,7 +172,7 @@ export function prepareChapter(command: string, values: ChapterValues, required:
         }
       }
     } else if (typeof entry.plate === "string") {
-      addPlate(entry.plate, shot.motion_tier === "plate3d");
+      if (plateKey(shot.id, entry.plate)) addPlate(entry.plate, shot.motion_tier === "plate3d");
     } else if (typeof entry.footage === "string") {
       const name = entry.footage;
       if (!realFootage) {
@@ -189,9 +199,10 @@ export function prepareChapter(command: string, values: ChapterValues, required:
   }
 
   const ramp = !values["no-ramp"];
-  const built = buildPlan({ chapter: chapterId, board: JSON.parse(boardText), edl, words, beats, hits, display, palette, media, ramp });
+  const built = buildPlan({ chapter: chapterId, board: JSON.parse(boardText), edl, words, beats, hits, display, palette, media, ramp, vertical });
   // A shot already refused above is not refused again for the media it then lacks.
-  problems.push(...built.problems.filter((p) => ![...flagged].some((id) => p.includes(`${shown(id)} plays`))));
+  const isMediaLine = (p: string) => /^--(plates|clips|footage):/.test(p);
+  problems.push(...built.problems.filter((p) => !(isMediaLine(p) && [...flagged].some((id) => p.includes(shown(id))))));
   const out = fromCaller(v.out);
   const outIssue = outProblem(out);
   if (outIssue) problems.push(outIssue);
@@ -297,6 +308,7 @@ export async function stageChapter(p: Prepared, extra: Partial<FilmProps> = {}):
       footage: p.inputs.footage,
       brand: p.inputs.brand as string,
       ramp: p.plan.ramp,
+      vertical: p.plan.vertical,
       ...extra,
     };
     const propsFile = join(dir, "props.json");
@@ -312,6 +324,7 @@ export async function stageChapter(p: Prepared, extra: Partial<FilmProps> = {}):
       palette: JSON.parse(p.palette),
       media,
       ramp: p.plan.ramp,
+      vertical: p.plan.vertical,
     });
     if (!rebuilt.plan) throw new Refused(rebuilt.problems);
     return { dir, publicDir, propsFile, props, plan: rebuilt.plan };

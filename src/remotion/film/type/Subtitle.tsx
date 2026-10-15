@@ -3,11 +3,14 @@ import { plainText, type DrawnBlock } from "../plan.ts";
 import { Tokens } from "./Tokens.tsx";
 
 // subtitle: the sung line on an in-scene band, bottom left, in the text face at 44 px (stepped
-// down to 36 to fit two lines), the sung word lit in the accent. 9:16: beneath the picture.
+// down to 36 to fit two lines), the sung word lit in the accent. The band is sized from the
+// whole line on the block's first frame and does not move or grow as words arrive. 9:16:
+// beneath the picture.
 export function Subtitle({ block, look }: { block: DrawnBlock; look: FilmLook }) {
   const { margin } = look;
   const width = look.vertical ? look.width - margin.l - margin.r : Math.round(look.width * 0.58);
-  const size = look.fit(plainText(block.text), "text", 44, 36, width - 44, 2);
+  const { max, min, lines } = look.sizes.subtitle;
+  const size = look.fit(plainText(block.text), "text", max, min, width - 44, lines);
   const text = (
     <div style={{ fontFamily: `"${look.face.text}", sans-serif`, fontWeight: 600, fontSize: size, lineHeight: 1.2, letterSpacing: "-0.01em", textWrap: "balance", overflowWrap: "anywhere" }}>
       <Tokens tokens={block.tokens} look={look} />

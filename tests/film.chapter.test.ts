@@ -35,6 +35,7 @@ test("a ten-second chapter renders straight to video, with its tokens sidecar, s
   assert.deepEqual(readdirSync(join(p.dir, "ch")).sort(), ["ch01.audio.json", "ch01.mp4", "ch01.tokens.json", "chapter-report.json"]);
   const report = readJson(join(p.dir, "ch", "chapter-report.json"));
   assert.equal(report.ok, true);
+  assert.equal(report.ramp, true);
   assert.equal(report.video.width, 1920);
   assert.equal(report.video.height, 1080);
   assert.equal(report.video.fps, 24);
@@ -101,17 +102,43 @@ test("a board built to flash (four masthead swaps a second, ramps off) fails the
   });
   board.plates = [{ plate: "p-white", set: "sky", prompt: "sky", aspect: "16:9", used_by: [] }];
   const f = chapterProject(board);
-  const made = timed("film:chapter --no-ramp, 1.5 seconds", () => film("chapter", f.dir, [...f.args("ch").map((a) => (a === "ch01" ? "fl" : a)), "--range", "0:1.5", "--no-ramp"]));
+  const args = [...f.args("ch").map((a) => (a === "ch01" ? "fl" : a)), "--range", "0:1.5", "--no-ramp"];
+  // --no-ramp is test-only: refused without FILM_TEST=1.
+  const refused = film("chapter", f.dir, args);
+  assert.equal(refused.status, 2);
+  assert.deepEqual(lines(refused.stdout), ["--no-ramp is for the kit's tests only (FILM_TEST=1)"]);
+  const made = timed("film:chapter --no-ramp, 1.5 seconds", () => film("chapter", f.dir, args, { FILM_TEST: "1" }));
   assert.equal(made.status, 0, made.stdout + made.stderr);
+  assert.equal(readJson(join(f.dir, "ch", "chapter-report.json")).ramp, false);
   const result = film("flash", f.dir, ["--video", "ch/fl.mp4", "--out", "flash"]);
   assert.equal(result.status, 3, result.stdout + result.stderr);
   assert.match(lines(result.stdout)[0], /^flash: [4-9] flashes in one second between /);
   assert.equal(readJson(join(f.dir, "flash", "flash-report.json")).ok, false);
 });
 
+test("the history check fails (exit 3) on a frame that depends on the one before: the test-only probe", () => {
+  const refused = film("history", p.dir, [...p.args("leak"), "--frames", "190,60", "--test-leak"]);
+  assert.equal(refused.status, 2);
+  assert.deepEqual(lines(refused.stdout), ["--test-leak is for the kit's tests only (FILM_TEST=1)"]);
+  const result = timed("film:history --test-leak", () => film("history", p.dir, [...p.args("leak"), "--frames", "190,60", "--test-leak"], { FILM_TEST: "1" }));
+  assert.equal(result.status, 3, result.stdout + result.stderr);
+  assert.match(lines(result.stdout)[0], /^history: frame 60 differs by \d+ levels at \d+,\d+ after frame 190 \(\d+ channels over 40\)$/);
+  const report = readJson(join(p.dir, "leak", "history-report.json"));
+  assert.equal(report.ok, false);
+  assert.ok(report.max_difference > 40);
+  // The probe's square is the top-left corner.
+  assert.ok(report.at.x < 96 && report.at.y < 96, JSON.stringify(report.at));
+});
+
 test("refusals before any work: flags, chapter, range, a missing take, footage outside its folder, mattes, typed words", () => {
   const edl = readJson(join(p.dir, "edit", "edl.json"));
   writeFileSync(join(p.dir, "edit", "escape.json"), JSON.stringify({ ...edl, s004: { footage: "../board/shots.json" } }));
+  writeFileSync(join(p.dir, "edit", "badplate.json"), JSON.stringify({ ...edl, s001: { plate: "../board/shots" } }));
+  writeFileSync(join(p.dir, "edit", "badtake.json"), JSON.stringify({ ...edl, s002: { segs: [{ t0: 0.976, clip: "../W01-t2", in: 0.31 }] } }));
+  const wide = structuredClone(CHAPTER_BOARD);
+  const long = "The city WAKES-AND-EVERY-SINGLE-WINDOW-ON-THE-BLOCK-IS-LIT-UP";
+  wide.shots[1].type[0] = { line: 0, mode: "coverline", text: long, placement: "left" };
+  writeFileSync(join(p.dir, "board", "wide.json"), JSON.stringify(wide));
   mkdirSync(join(p.dir, "bare-plates"), { recursive: true });
   for (const f of readdirSync(join(p.dir, "plates")).filter((f) => !f.includes(".near.") && !f.includes(".mid.") && !f.includes(".far."))) cpSync(join(p.dir, "plates", f), join(p.dir, "bare-plates", f));
   mkdirSync(join(p.dir, "no-takes"), { recursive: true });
@@ -127,6 +154,9 @@ test("refusals before any work: flags, chapter, range, a missing take, footage o
     [[...base, "--range", "soon"], ['--range is "soon", want t0:t1 in song seconds (t0 before t1)']],
     [swap(base, "--clips", "no-takes"), ['--clips: "s002" plays take "W01-t2", which is not in the clips folder']],
     [swap(base, "--edl", "edit/escape.json"), ['--footage: "s004" footage "../board/shots.json" is outside the footage folder']],
+    [swap(base, "--edl", "edit/badplate.json"), ['--edl: "s001" names plate "../board/shots", which is not a plate key']],
+    [swap(base, "--edl", "edit/badtake.json"), ['--edl: "s002" names take "../W01-t2", which is not <clip>-t<n>']],
+    [swap(base, "--board", "board/wide.json"), [`--board: "s002" type[0] coverline "${long}" does not fit one line at 56 px (16:9)`]],
     [swap(base, "--plates", "bare-plates"), ['--plates: "s005" is plate3d and plate "p-roof" has no near, mid and far mattes']],
     [swap(base, "--board", "board/typed.json"), ['--board: "s002" type[1] shows 3 sung words, line 1 has 4 in words.json']],
   ];

@@ -45,12 +45,13 @@ function slotStyle(slot: string, look: FilmLook): CSSProperties {
   }
 }
 
-export function Devices({ devices, look }: { devices: DrawnDevice[]; look: FilmLook }) {
+export function Devices({ devices, look, scale = 1 }: { devices: DrawnDevice[]; look: FilmLook; scale?: number }) {
   if (devices.length === 0) return null;
   if (look.vertical) {
     const { above } = look;
     return (
-      <div style={{ position: "absolute", left: above.x, top: above.y, width: above.w, height: above.h, display: "flex", flexDirection: "column", justifyContent: "flex-start", alignItems: "flex-start", gap: 20, overflow: "hidden" }}>
+      // The shot's devices stepped down together (plan.ts sizes them so they fit; never clipped).
+      <div style={{ position: "absolute", left: above.x, top: above.y, width: above.w / scale, display: "flex", flexDirection: "column", justifyContent: "flex-start", alignItems: "flex-start", gap: 20, transform: `scale(${scale})`, transformOrigin: "left top" }}>
         {devices.map((d) => (
           <div key={d.index}>{one(d, look)}</div>
         ))}

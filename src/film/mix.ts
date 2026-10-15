@@ -11,8 +11,9 @@ import { SOUNDS, type SoundKind } from "../remotion/film/plan.ts";
 // film_py/sounds.py), the events bus ducked under the vocal stem with ffmpeg's
 // sidechaincompress, then brought to the master's own integrated loudness (EBU R128, measured
 // with ebur128) and written as `mix.wav`, 48 kHz 24-bit. The report holds the master's and the
-// mix's loudness; a mix more than 1 LU from the master's fails (exit 3). An event outside the
-// master's length is refused (exit 2).
+// mix's loudness. Checked and failed (exit 3, the report written): an event at or past the
+// master's end (no mix is made), or a mix more than 1 LU from the master's after levelling. The
+// limiter runs only when the levelled mix would peak over -0.2 dBFS (the report says which).
 
 const COMMAND = "film:mix";
 const RATE = 48000;
@@ -31,9 +32,10 @@ async function loudness(file: string): Promise<{ integrated: number; range: numb
   return { integrated: Number(i[1]), range: lra ? Number(lra[1]) : 0, peak: peak && peak[1] !== "-inf" ? Number(peak[1]) : null };
 }
 
-function readEvents(files: string[], duration: number): { events: Event[]; problems: string[] } {
+function readEvents(files: string[], duration: number): { events: Event[]; problems: string[]; outside: string[] } {
   const events: Event[] = [];
   const problems: string[] = [];
+  const outside: string[] = [];
   for (const file of files) {
     let raw: unknown;
     try {
@@ -56,11 +58,11 @@ function readEvents(files: string[], duration: number): { events: Event[]; probl
       if (typeof t !== "number" || !Number.isFinite(t) || t < 0) return void problems.push(`${at} has no time (t, in song seconds)`);
       if (!(SOUNDS as readonly unknown[]).includes(kind)) return void problems.push(`${at} kind ${shown(kind)} is not one of ${SOUNDS.join(", ")}`);
       if (typeof gain !== "number" || !(gain >= 0 && gain <= 2)) return void problems.push(`${at} gain ${shown(gain)} is not 0 to 2`);
-      if (t >= duration) return void problems.push(`${at} at ${t.toFixed(3)} s is outside the master (${duration.toFixed(3)} s)`);
+      if (t >= duration) return void outside.push(`mix: ${at.slice("--events: ".length)} at ${t.toFixed(3)} s is outside the master (${duration.toFixed(3)} s)`);
       events.push({ t, kind: kind as SoundKind, gain, from: file });
     });
   }
-  return { events: events.sort((a, b) => a.t - b.t), problems };
+  return { events: events.sort((a, b) => a.t - b.t), problems, outside };
 }
 
 async function main(): Promise<number> {
@@ -86,7 +88,7 @@ async function main(): Promise<number> {
   const duration = await audioSeconds(master);
   if (duration === null) throw new Refused(["--master cannot be read as audio"]);
   if ((await audioSeconds(vocals)) === null) throw new Refused(["--vocals cannot be read as audio"]);
-  const { events, problems } = readEvents(eventFiles, duration);
+  const { events, problems, outside } = readEvents(eventFiles, duration);
   const kinds = [...new Set(events.map((e) => e.kind))];
   for (const kind of kinds) {
     try {
@@ -99,6 +101,11 @@ async function main(): Promise<number> {
   const issue = outProblem(out);
   if (issue) problems.push(issue);
   if (problems.length > 0) throw new Refused(problems);
+  const inputsUsed = { master, vocals, sounds: soundsDir, events: eventFiles };
+  if (outside.length > 0) {
+    writeReport(out, "mix", { ok: false, inputs: inputsUsed, outputs: { report: "mix-report.json" }, seconds: Math.round(duration * 1000) / 1000, outside });
+    throw new Failed(outside);
+  }
 
   const temp = mkdtempSync(join(tmpdir(), "studio-kit-mix-"));
   try {
@@ -129,9 +136,10 @@ async function main(): Promise<number> {
     await must("mixing", "ffmpeg", ["-y", "-loglevel", "error", ...inputs, "-filter_complex", graph.join(";"), "-map", "[mix]", "-c:a", "pcm_f32le", "-ar", String(RATE), raw]);
     const before = await loudness(raw);
     const gain = target.integrated - before.integrated;
+    const limiter = before.peak === null || before.peak + gain > -0.2;
     await must("levelling the mix", "ffmpeg", [
       "-y", "-loglevel", "error", "-i", raw,
-      "-af", `volume=${gain.toFixed(3)}dB,alimiter=limit=0.977:attack=2:release=50:level=disabled`,
+      "-af", `volume=${gain.toFixed(3)}dB${limiter ? ",alimiter=limit=0.977:attack=2:release=50:level=disabled" : ""}`,
       "-c:a", "pcm_s24le", "-ar", String(RATE), join(temp, "mix.wav"),
     ]);
     const after = await loudness(join(temp, "mix.wav"));
@@ -140,13 +148,13 @@ async function main(): Promise<number> {
     const ok = Math.abs(delta) <= TOLERANCE_LU;
     writeReport(out, "mix", {
       ok,
-      inputs: { master, vocals, sounds: soundsDir, events: eventFiles },
+      inputs: inputsUsed,
       outputs: { mix: "mix.wav", report: "mix-report.json" },
       format: { rate: RATE, bits: 24, channels: 2 },
       seconds: Math.round(duration * 1000) / 1000,
       events: events.map((e) => ({ t: e.t, kind: e.kind, gain: e.gain })),
       ducking: { sidechain: "vocals", threshold: 0.02, ratio: 8, attack_ms: 5, release_ms: 250 },
-      loudness: { target_lufs: target.integrated, master: target, before_levelling: before, mix: after, gain_db: Math.round(gain * 100) / 100, delta_lu: delta, tolerance_lu: TOLERANCE_LU },
+      loudness: { target_lufs: target.integrated, master: target, before_levelling: before, mix: after, gain_db: Math.round(gain * 1000) / 1000, limiter, delta_lu: delta, tolerance_lu: TOLERANCE_LU },
     });
     if (!ok) throw new Failed([`mix: ${after.integrated} LUFS, the master ${target.integrated} LUFS (${delta} LU off, want within ${TOLERANCE_LU})`]);
     console.log(`mix: ${events.length} event${events.length === 1 ? "" : "s"} under the master, ${after.integrated} LUFS (the master ${target.integrated} LUFS, ${delta >= 0 ? "+" : ""}${delta} LU), mix.wav 48 kHz 24-bit`);

@@ -14,7 +14,8 @@ raw file holds the video decoded by ffmpeg at 96x54 and 24 fps as rgb24 frames.
 - A flash is a pair of opposing transitions, counted at the second one; pairs, not transitions.
 - Any one-second window (24 frames) holding more than three flashes fails.
 - A single-frame pop is a frame whose mean differs from both neighbours in the same direction by
-  more than 0.03 (a lit rim rushing past the lens); every pop fails too.
+  more than 0.03 (a lit rim rushing past the lens). Pops are flagged as warnings, never failed:
+  only the flash count fails.
 
 The result: frames, the mean luminance per frame (rounded), transitions, flashes, the worst
 window, the failing windows and the pops.
@@ -120,7 +121,7 @@ def main():
         "worst": worst,
         "windows": merged,
         "pops": pops,
-        "ok": not merged and not pops,
+        "ok": not merged,
     })
 
 

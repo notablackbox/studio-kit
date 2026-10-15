@@ -53,12 +53,14 @@ test("four flashes in a second fail with exit 3, the window in the report", () =
   assert.ok(r.windows.length >= 1);
 });
 
-test("a single-frame pop fails, even with no flash over the threshold", () => {
+test("a single-frame pop is flagged as a warning, never failed (R-a)", () => {
   const result = film("flash", dir, ["--video", video("pop.mp4", "if(eq(N,12),118,100)"), "--out", "pop"]);
-  assert.equal(result.status, 3, result.stdout + result.stderr);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
   const out = lines(result.stdout);
-  assert.equal(out.length, 1);
-  assert.match(out[0], /^flash: a single-frame pop at 0\.500 s \(frame 12\): mean luminance 0\.1\d+ -> 0\.1\d+ -> 0\.1\d+$/);
+  assert.equal(out.length, 2);
+  assert.equal(out[0], "flash: clean, 48 frames, at most 0 flashes in any second, 1 pop flagged");
+  assert.match(out[1], /^warning: a single-frame pop at 0\.500 s \(frame 12\): mean luminance 0\.1\d+ -> 0\.1\d+ -> 0\.1\d+$/);
+  assert.equal(report("pop").ok, true);
   assert.equal(report("pop").pops.length, 1);
   assert.deepEqual(report("pop").flashes, []);
 });

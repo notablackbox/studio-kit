@@ -2,9 +2,11 @@ import type { CSSProperties } from "react";
 import type { FilmLook } from "../look.ts";
 import type { DrawnToken } from "../plan.ts";
 
-// A run of display tokens as frameState gave them: each token's typed part, the rest held in
-// place but invisible so the line never re-flows as it types; the accent only where frameState
-// granted it; `~x~` struck, `_x_` in the mono face.
+// A run of display tokens as frameState gave them, the whole line laid out from the block's
+// first frame: a token not yet sung, and the untyped rest of one being typed, are in place but
+// `visibility: hidden` (nothing of them shows: no shadow, no strike), so the line never moves
+// or re-flows as words arrive. The accent only where frameState granted it; `~x~` struck,
+// `_x_` in the mono face.
 export function Tokens({ tokens, look, upper = false, color }: { tokens: DrawnToken[]; look: FilmLook; upper?: boolean; color?: string }) {
   return (
     <>
@@ -24,9 +26,9 @@ export function Tokens({ tokens, look, upper = false, color }: { tokens: DrawnTo
         };
         return (
           <span key={i}>
-            <span style={style}>
+            <span style={tok.drawn ? style : { ...style, visibility: "hidden" }}>
               {chars.slice(0, tok.shown).join("")}
-              <span style={{ color: "transparent" }}>{chars.slice(tok.shown).join("")}</span>
+              <span style={{ visibility: "hidden" }}>{chars.slice(tok.shown).join("")}</span>
             </span>
             {i + 1 < tokens.length ? " " : ""}
           </span>

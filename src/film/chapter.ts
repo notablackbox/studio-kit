@@ -17,7 +17,7 @@ import { audioEvents, tokensSidecar } from "../remotion/film/plan.ts";
 const COMMAND = "film:chapter";
 
 export async function renderChapter(command: string, report: string, values: ChapterValues, vertical: boolean): Promise<number> {
-  const prepared = prepareChapter(command, values);
+  const prepared = prepareChapter(command, values, { vertical });
   const { out, chapter } = prepared;
   const suffix = vertical ? ".9x16" : "";
   const names = { video: `${chapter}${suffix}.mp4`, tokens: `${chapter}${suffix}.tokens.json`, audio: `${chapter}${suffix}.audio.json` };
@@ -49,7 +49,9 @@ export async function renderChapter(command: string, report: string, values: Cha
     const frames = b - a + 1;
     writeReport(out, report, {
       ok: true,
-      inputs: { ...prepared.inputs, chapter, range: prepared.range, vertical, ramp: plan.ramp },
+      inputs: { ...prepared.inputs, chapter, range: prepared.range, vertical },
+      // false only under the test-only --no-ramp: film:encode refuses such a chapter.
+      ramp: plan.ramp,
       outputs: { video: names.video, tokens: names.tokens, audio: names.audio, report: `${report}-report.json` },
       chapter: { id: chapter, t0: plan.t0, t1: plan.t1, frames: plan.to - plan.from },
       rendered: { frames, first: a, last: b, t0: Math.round(t0 * 10000) / 10000, t1: Math.round(t1 * 10000) / 10000 },

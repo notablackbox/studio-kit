@@ -7,7 +7,8 @@ import { Tokens } from "./Tokens.tsx";
 export function Coverline({ block, look }: { block: DrawnBlock; look: FilmLook }) {
   const { margin } = look;
   const width = look.width - margin.l - margin.r;
-  const size = look.fit(plainText(block.text), "text", 88, 56, width, look.vertical ? 2 : 1);
+  const { max, min, lines } = look.sizes.coverline;
+  const size = look.fit(plainText(block.text), "text", max, min, width, lines);
   const style = {
     fontFamily: `"${look.face.text}", sans-serif`,
     fontWeight: 600,

@@ -9,8 +9,8 @@ export function Masthead({ block, look }: { block: DrawnBlock; look: FilmLook })
   const { margin } = look;
   const width = look.width - margin.l - margin.r;
   const text = plainText(block.text).toUpperCase();
-  const base = look.vertical ? 1080 : look.height;
-  const size = look.fit(text, "headline", Math.round(base * 0.16), Math.round(base * (look.vertical ? 0.09 : 0.12)), width, 2);
+  const { max, min, lines } = look.sizes.masthead;
+  const size = look.fit(text, "headline", max, min, width, lines);
   return (
     <div
       style={{

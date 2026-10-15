@@ -7,8 +7,9 @@ import { must, probeVideo } from "./lib/media.ts";
 // film:flash: the WCAG 2.3.1 flash check (toolkit item 21). ffmpeg decodes the video at 96x54
 // and 24 fps into temp; film_py.flash counts flashes (pairs of opposing luminance transitions of
 // 0.1 or more over a quarter of the frame) and single-frame pops (a frame over 0.03 off both
-// neighbours the same way). More than three flashes in any one-second window, or any pop, fails
-// (exit 3, one line per failing window or pop, the report written with every window and pop).
+// neighbours the same way). More than three flashes in any one-second window fails (exit 3, one
+// line per failing window, the report written with every window and pop). A pop is flagged, never
+// failed: one `warning:` line per pop on stdout, whatever the exit code.
 
 const COMMAND = "film:flash";
 const W = 96;
@@ -56,13 +57,13 @@ async function main(): Promise<number> {
       transitions: result.transitions,
       mean_luminance: result.mean,
     });
+    const warnings = result.pops.map((p) => `warning: a single-frame pop at ${p.t.toFixed(3)} s (frame ${p.frame}): mean luminance ${p.before} -> ${p.mean} -> ${p.after}`);
     if (!result.ok) {
-      throw new Failed([
-        ...result.windows.map((w) => `flash: ${w.flashes} flashes in one second between ${w.t0.toFixed(3)} and ${w.t1.toFixed(3)} s, want at most 3`),
-        ...result.pops.map((p) => `flash: a single-frame pop at ${p.t.toFixed(3)} s (frame ${p.frame}): mean luminance ${p.before} -> ${p.mean} -> ${p.after}`),
-      ]);
+      throw new Failed([...result.windows.map((w) => `flash: ${w.flashes} flashes in one second between ${w.t0.toFixed(3)} and ${w.t1.toFixed(3)} s, want at most 3`), ...warnings]);
     }
-    console.log(`flash: clean, ${result.frames} frames, at most ${result.worst.count} flash${result.worst.count === 1 ? "" : "es"} in any second, no pops`);
+    const pops = result.pops.length;
+    console.log(`flash: clean, ${result.frames} frames, at most ${result.worst.count} flash${result.worst.count === 1 ? "" : "es"} in any second, ${pops === 0 ? "no pops" : `${pops} pop${pops === 1 ? "" : "s"} flagged`}`);
+    for (const line of warnings) console.log(line);
     return EXIT.done;
   } finally {
     rmSync(temp, { recursive: true, force: true });

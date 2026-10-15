@@ -3,12 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EXIT, KIT_ROOT, Refused, fromCaller, isMain, outProblem, parseFlags, requireFile, run, shown, writeIn, writeReport } from "./lib/cli.ts";
 import { RENDER_TIMEOUT, moveIn, must, probeVideo } from "./lib/media.ts";
-import { lyricLines, parseTokens, plainText } from "../remotion/film/plan.ts";
+import { lyricLines, parseTokens, plainText, readPalette } from "../remotion/film/plan.ts";
 
 // film:captions: the captions (spec 6). `captions.srt` holds one cue per display line: the
 // line's display text with the token markers stripped, from its first sung word's start to its
 // last word's end (words.json). With --video, `captioned.mp4` is that video with the SRT
-// burned in by ffmpeg's subtitles filter in the text face (Inter), bottom left.
+// burned in by ffmpeg's subtitles filter in the text face (Inter), bottom left, in the brand's
+// warm white outlined in its black (palette.json). The cues are song time, so --video must be
+// the full master (or anything that starts at the song's first sample), not a chapter.
 
 const COMMAND = "film:captions";
 
@@ -47,7 +49,17 @@ async function main(): Promise<number> {
     });
   const video = values.video ? requireFile(fromCaller(values.video), "--video") : null;
   if (video && !(await probeVideo(video))) problems.push("--video cannot be read as a video");
-  const fonts = join(values.brand ? fromCaller(values.brand) : join(KIT_ROOT, "brand"), "fonts");
+  const brand = values.brand ? fromCaller(values.brand) : join(KIT_ROOT, "brand");
+  const fonts = join(brand, "fonts");
+  let colours: { white: string; black: string } | null = null;
+  if (video) {
+    try {
+      colours = readPalette(JSON.parse(readFileSync(join(brand, "palette.json"), "utf8"))).palette;
+    } catch {
+      colours = null;
+    }
+    if (!colours) problems.push("--brand has no palette.json with black and warmWhite");
+  }
   if (video) {
     try {
       if (!statSync(fonts).isDirectory()) throw new Error();
@@ -77,7 +89,10 @@ async function main(): Promise<number> {
       const fontDir = join(temp, "fonts");
       mkdirSync(fontDir);
       for (const f of readdirSync(fonts).filter((f) => /^Inter-.*\.(ttf|otf|woff2?)$/i.test(f))) copyFileSync(join(fonts, f), join(fontDir, f));
-      const style = "FontName=Inter,FontSize=12,PrimaryColour=&H00F7F5F5,OutlineColour=&H000A0A0A,BorderStyle=1,Outline=1,Shadow=0,Alignment=1,MarginL=20,MarginV=22";
+      // ASS colours are &HAABBGGRR.
+      const ass = (hex: string) => `&H00${hex.slice(5, 7)}${hex.slice(3, 5)}${hex.slice(1, 3)}`.toUpperCase();
+      const palette = colours as { white: string; black: string };
+      const style = `FontName=Inter,FontSize=12,PrimaryColour=${ass(palette.white)},OutlineColour=${ass(palette.black)},BorderStyle=1,Outline=1,Shadow=0,Alignment=1,MarginL=20,MarginV=22`;
       await must("burning in the captions", "ffmpeg", [
         "-y", "-loglevel", "error", "-i", video,
         "-vf", `subtitles=filename=captions.srt:fontsdir=fonts:force_style='${style}'`,
@@ -91,7 +106,7 @@ async function main(): Promise<number> {
       rmSync(temp, { recursive: true, force: true });
     }
   }
-  writeReport(out, "captions", { ok: true, inputs: { words: wordsFile, display: displayFile, video, fonts: video ? fonts : null }, outputs, cues, captioned: burned });
+  writeReport(out, "captions", { ok: true, inputs: { words: wordsFile, display: displayFile, video, brand: video ? brand : null }, outputs, cues, captioned: burned });
   console.log(`captions: ${cues.length} cue${cues.length === 1 ? "" : "s"} in captions.srt${video ? ", burned into captioned.mp4" : ""}`);
   return EXIT.done;
 }

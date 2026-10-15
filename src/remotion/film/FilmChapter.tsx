@@ -6,6 +6,7 @@ import { abs, filmLook, type FilmLook } from "./look.ts";
 import { buildPlan, FILM_FPS, frameState, type Media, type Plan } from "./plan.ts";
 import { Picture } from "./plates/Picture.tsx";
 import { ditherClip } from "./transitions.ts";
+import { LeakProbe } from "./testing.tsx";
 import { TypeBlock } from "./type/index.tsx";
 
 // FilmChapter (R5): one chapter of the music video, 24 fps, 1920x1080; FilmChapterVertical is
@@ -30,7 +31,9 @@ export type FilmProps = {
   footage: string | null;
   brand: string;
   ramp?: boolean; // false only under film:chapter's test-only --no-ramp
+  vertical?: boolean; // FilmChapterVertical: the plan checks type and devices against 9:16
   history?: [number, number] | null; // FilmHistory: draw frame A, then frame B, in one page
+  leak?: boolean; // test only (film:history --test-leak under FILM_TEST=1): the history-dependent probe
   plan?: Plan;
 };
 
@@ -69,13 +72,14 @@ export const calculateFilmMetadata: CalculateMetadataFunction<FilmProps> = async
     palette: JSON.parse(palette),
     media: JSON.parse(media) as Media,
     ramp: props.ramp !== false,
+    vertical: props.vertical === true,
   });
   if (!plan) throw new Error(problems.join("; "));
   const frames = props.history ? 2 : Math.max(1, plan.to - plan.from);
   return { durationInFrames: frames, fps: FILM_FPS, props: { ...props, plan } };
 };
 
-function Frame({ plan, look, frame }: { plan: Plan; look: FilmLook; frame: number }) {
+function Frame({ plan, look, frame, leak }: { plan: Plan; look: FilmLook; frame: number; leak?: boolean }) {
   const state = frameState(plan, frame);
   const { color } = look;
   const pictureBox = abs(look.picture);
@@ -91,8 +95,9 @@ function Frame({ plan, look, frame }: { plan: Plan; look: FilmLook; frame: numbe
       {state.blocks.map((block, i) => (
         <TypeBlock key={`b${i}`} block={block} look={{ ...look, color: { ...color, accent: state.accent } }} />
       ))}
-      <Devices devices={state.devices} look={{ ...look, color: { ...color, accent: state.accent } }} />
+      <Devices devices={state.devices} scale={state.deviceScale} look={{ ...look, color: { ...color, accent: state.accent } }} />
       {state.chrome ? <Chrome chrome={state.chrome} look={look} /> : null}
+      {leak ? <LeakProbe frame={frame} color={color.white} /> : null}
     </AbsoluteFill>
   );
 }
@@ -107,6 +112,6 @@ export function FilmChapter(props: FilmProps) {
   // one after the other through the same components in the same page (film:history renders
   // with one tab), so anything a frame kept from the one before would show in B.
   const chapterFrame = props.history ? props.history[Math.min(1, Math.max(0, frame))] : frame;
-  return <Frame plan={props.plan} look={look} frame={chapterFrame} />;
+  return <Frame plan={props.plan} look={look} frame={chapterFrame} leak={props.leak === true} />;
 }
 

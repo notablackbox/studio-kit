@@ -2,7 +2,7 @@ import { readFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { EXIT, Failed, Refused, Unexpected, isMain, parseFlags, run, shown, writeIn, writeReport } from "./lib/cli.ts";
 import { CHAPTER_FLAGS, prepareChapter, stageChapter, type ChapterValues } from "./lib/chapter.ts";
-import { ENTRY, TOOL_TIMEOUT, must, remotion } from "./lib/media.ts";
+import { ENTRY, TOOL_TIMEOUT, must, probeVideo, remotion } from "./lib/media.ts";
 
 // film:history: the history check (toolkit item 20; R2). Frame B is rendered alone with
 // `npx remotion still`; then FilmHistory renders frame A and then frame B in one page (one tab,
@@ -12,17 +12,48 @@ import { ENTRY, TOOL_TIMEOUT, must, remotion } from "./lib/media.ts";
 // film:chapter's (without --range) and `--frames A,B` (the chapter's frames, from 0).
 
 const COMMAND = "film:history";
-const LIMIT = 40;
+const LIMIT = 40; // levels, any channel
 
 async function rgb(file: string, out: string): Promise<Buffer> {
   await must(`decoding ${file.split("/").pop()}`, "ffmpeg", ["-y", "-loglevel", "error", "-i", file, "-f", "rawvideo", "-pix_fmt", "rgb24", out], TOOL_TIMEOUT);
   return readFileSync(out);
 }
 
+export type Comparison = { worst: number; at: { x: number; y: number } | null; over: number; width: number; height: number };
+
+// Two images compared as raw RGB (decoded by ffmpeg into `temp`): the largest difference of any
+// channel, where it is, and how many channels differ by more than the limit.
+export async function compareImages(first: string, second: string, temp: string): Promise<Comparison> {
+  const size = await probeVideo(first);
+  const other = await probeVideo(second);
+  if (!size || !other || size.width !== other.width || size.height !== other.height) throw new Unexpected("the two renders of frame B differ in size");
+  const one = await rgb(first, join(temp, "first.rgb"));
+  const two = await rgb(second, join(temp, "second.rgb"));
+  if (one.length !== two.length || one.length === 0) throw new Unexpected("the two renders of frame B differ in size");
+  let worst = 0;
+  let at = -1;
+  let over = 0;
+  for (let k = 0; k < one.length; k++) {
+    const d = Math.abs(one[k] - two[k]);
+    if (d > worst) {
+      worst = d;
+      at = k;
+    }
+    if (d > LIMIT) over++;
+  }
+  const pixel = at >= 0 ? Math.floor(at / 3) : -1;
+  return { worst, at: pixel >= 0 ? { x: pixel % size.width, y: Math.floor(pixel / size.width) } : null, over, width: size.width, height: size.height };
+}
+
+export const HISTORY_LIMIT = 40;
+
 async function main(): Promise<number> {
-  const { values } = parseFlags(COMMAND, { ...CHAPTER_FLAGS, frames: { type: "string" } });
+  // --test-leak (FILM_TEST=1 only) draws the kit's deliberately history-dependent probe, so the
+  // tests can prove this check fails.
+  const { values } = parseFlags(COMMAND, { ...CHAPTER_FLAGS, frames: { type: "string" }, "test-leak": { type: "boolean" } });
+  if (values["test-leak"] && process.env.FILM_TEST !== "1") throw new Refused(["--test-leak is for the kit's tests only (FILM_TEST=1)"]);
   if (values.range !== undefined) throw new Refused([`${COMMAND}: --range is not used here; name the two frames with --frames A,B`]);
-  const prepared = prepareChapter(COMMAND, values as ChapterValues, ["frames"]);
+  const prepared = prepareChapter(COMMAND, values as ChapterValues, { required: ["frames"] });
   const m = /^(\d+),(\d+)$/.exec(values.frames ?? "");
   const total = prepared.plan.to - prepared.plan.from;
   if (!m) throw new Refused([`--frames is ${shown(values.frames)}, want A,B (two frames of the chapter)`]);
@@ -32,7 +63,7 @@ async function main(): Promise<number> {
   if (a === b) throw new Refused([`--frames ${shown(values.frames)}: A and B must differ`]);
 
   const { out } = prepared;
-  const stage = await stageChapter(prepared, { history: [a, b] });
+  const stage = await stageChapter(prepared, { history: [a, b], ...(values["test-leak"] ? { leak: true } : {}) });
   try {
     const alone = join(stage.dir, "b-alone.png");
     const seq = join(stage.dir, "a-then-b");
@@ -44,23 +75,7 @@ async function main(): Promise<number> {
     const made = readdirSync(seq).filter((f) => f.endsWith(".png")).sort();
     if (made.length !== 2) throw new Unexpected(`FilmHistory rendered ${made.length} frames, want 2`);
     const after = join(seq, made[1]);
-    const one = await rgb(alone, join(stage.dir, "alone.rgb"));
-    const two = await rgb(after, join(stage.dir, "after.rgb"));
-    if (one.length !== two.length || one.length === 0) throw new Unexpected("the two renders of frame B differ in size");
-    const width = 1920;
-    let worst = 0;
-    let at = -1;
-    let over = 0;
-    for (let k = 0; k < one.length; k++) {
-      const d = Math.abs(one[k] - two[k]);
-      if (d > worst) {
-        worst = d;
-        at = k;
-      }
-      if (d > LIMIT) over++;
-    }
-    const pixel = at >= 0 ? Math.floor(at / 3) : -1;
-    const where = pixel >= 0 ? { x: pixel % width, y: Math.floor(pixel / width) } : null;
+    const { worst, at: where, over } = await compareImages(alone, after, stage.dir);
     writeIn(out, `history-${b}.png`, readFileSync(alone));
     writeIn(out, `history-${a}-then-${b}.png`, readFileSync(after));
     const ok = worst <= LIMIT;
