@@ -16,9 +16,10 @@ unchanged in behaviour, so a claw pinned to v0.1.0 keeps working from this tree.
   beat map with a tempo curve, downbeats and sections), `film:words` (every
   sung word timed by the `MMS_FA` aligner, faster-whisper `tiny` as fallback,
   with an ear check), `film:hits` (kicks, snares, hats, hits, risers, fills,
-  vocal entries) and `film:window` (the clean vocal window of a sung clip).
-- The board: `film:audit` (the storyboard wiki's gates and the kit's three
-  more), `film:sheet` (the board as a PDF), `film:depth` (Depth Anything V2
+  vocal entries) and `film:window` (the clean vocal window of a sung clip,
+  cut from the shot's start for the clip's duration).
+- The board: `film:audit` (the storyboard wiki's gates and the kit's four
+  more, the chapters' tiling among them), `film:sheet` (the board as a PDF), `film:depth` (Depth Anything V2
   Small and three soft mattes for 2.5D) and `film:edl` (the edit list from the
   delivered takes).
 - Moving shots: `film:request` (shapes a `call_external` request with its

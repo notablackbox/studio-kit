@@ -11,27 +11,35 @@ import {
   parseFlags,
   requireFile,
   run,
+  shown,
   writeIn,
   writeReport,
 } from "./lib/cli.ts";
 import type { RunResult } from "../render.ts";
 
 // film:window: the clean vocal window for a sung clip (claudia.gallery's toolkit wiki, item
-// 14): one phrase of the vocal stem by word indices, from the gap before --from to the gap
-// after --to. Words are merged into phrases across gaps of 0.35 s or less; each phrase is kept
-// from 0.05 s before its first word to its last word's end plus a release tail that follows
-// the stem's 10 ms energy until it falls 24 dB under the phrase's peak (at least the 15 ms of
-// the fade, at most 0.40 s, never past the next word's start less 0.05 s); 15 ms
-// raised-cosine ramps on every gate edge and
-// silence elsewhere. The kept part is normalised to -16 dBFS RMS and limited to -1 dBFS peaks,
-// and written as <name>.wav (16-bit, 44.1 kHz, mono) and <name>.mp3 (192 kbps). A window
-// shorter than 4 s or longer than 8 s is refused with its length; --allow-short (for tests
-// only) lifts the lower bound.
+// 14). The vocal stem is cut at [song_t0, song_t0 + duration]: --song-t0 is the shot's start
+// and --duration the clip's, both in song time, so the file's first sample is song time
+// song_t0 (the clip's `song_t0`, which film:edl and film:sync read). The phrase's words are
+// --from to --to, or, without them, the words that start inside
+// [song_t0 - 0.02, song_t0 + duration - 0.08); they must lie inside the window, which must
+// start in a word gap and end in one (else exit 2, naming the word). Words are merged into
+// phrases across gaps of 0.35 s or less; each phrase is kept from 0.05 s before its first word
+// (never before the window or the word ahead) to its last word's end plus a release tail that
+// follows the stem's 10 ms energy until it falls 24 dB under the phrase's peak (at least the
+// 15 ms of the fade, at most 0.40 s, never past the next word's start less 0.05 s nor the
+// window's end); 15 ms raised-cosine ramps on every gate edge and silence elsewhere. The kept
+// part is normalised to -16 dBFS RMS and limited to -1 dBFS peaks, and written as <name>.wav
+// (16-bit, 44.1 kHz, mono) and <name>.mp3 (192 kbps). A duration under 4 s or over 8 s is
+// refused; --allow-short (for tests only) lifts the lower bound.
 
 const COMMAND = "film:window";
 const RATE = 44100;
 const TOOL_TIMEOUT_MS = 5 * 60 * 1000;
 const LEAD = 0.05;
+const START_SLACK = 0.02; // a derived word may start this much before the window ...
+const END_SLACK = 0.08; // ... and must start this much before its end
+const EPS = 1e-6;
 const MERGE_GAP = 0.35;
 const TAIL_MAX = 0.4;
 const TAIL_DB = 24;
@@ -95,7 +103,7 @@ function frames10(samples: Float32Array): Float64Array {
 
 type Phrase = { first: number; last: number; t0: number; t1: number; tail: number };
 
-function phrases(words: Word[], from: number, to: number, energy: Float64Array, windowStart: number): Phrase[] {
+function phrases(words: Word[], from: number, to: number, energy: Float64Array, windowStart: number, windowEnd: number): Phrase[] {
   const groups: [number, number][] = [];
   for (let i = from; i <= to; i++) {
     if (groups.length > 0 && words[i].t0 - words[i - 1].t1 <= MERGE_GAP) groups.at(-1)![1] = i;
@@ -109,7 +117,7 @@ function phrases(words: Word[], from: number, to: number, energy: Float64Array, 
     for (let k = Math.floor(words[first].t0 / 0.01); k < Math.ceil(end / 0.01) && k < energy.length; k++) peak = Math.max(peak, energy[k]);
     const floor = peak * 10 ** (-TAIL_DB / 20);
     const next = last + 1 < words.length ? words[last + 1].t0 - LEAD : Infinity;
-    const limit = Math.max(end, Math.min(end + TAIL_MAX, next));
+    const limit = Math.max(end, Math.min(end + TAIL_MAX, next, windowEnd));
     let t1 = end;
     for (let k = Math.ceil(end / 0.01); k < energy.length && (k + 1) * 0.01 <= limit; k++) {
       if (energy[k] < floor) break;
@@ -219,26 +227,61 @@ async function main(): Promise<number> {
     vocals: { type: "string" },
     words: { type: "string" },
     out: { type: "string" },
+    "song-t0": { type: "string" },
+    duration: { type: "string" },
     from: { type: "string" },
     to: { type: "string" },
     name: { type: "string" },
     "allow-short": { type: "boolean" },
   });
-  if (!values.vocals || !values.words || !values.out || values.from === undefined || values.to === undefined) {
-    throw new Refused([`${COMMAND}: --vocals <path>, --words <path>, --out <dir>, --from <word> and --to <word> are required`]);
+  if (!values.vocals || !values.words || !values.out || values["song-t0"] === undefined || values.duration === undefined) {
+    throw new Refused([`${COMMAND}: --vocals <path>, --words <path>, --out <dir>, --song-t0 <s> and --duration <s> are required`]);
   }
-  if (!/^\d+$/.test(values.from) || !/^\d+$/.test(values.to) || Number(values.from) > Number(values.to)) {
+  const seconds = (flag: string, value: string, ok: (n: number) => boolean, want: string) => {
+    const n = Number(value);
+    if (value.trim() === "" || !Number.isFinite(n) || !ok(n)) throw new Refused([`${flag} is ${shown(value)}, want ${want}`]);
+    return n;
+  };
+  const songT0 = seconds("--song-t0", values["song-t0"], (n) => n >= 0, "seconds from 0");
+  const duration = seconds("--duration", values.duration, (n) => n > 0, "seconds above 0");
+  if ((values.from === undefined) !== (values.to === undefined)) throw new Refused(["--from and --to go together"]);
+  const given = values.from !== undefined && values.to !== undefined;
+  if (given && (!/^\d+$/.test(values.from!) || !/^\d+$/.test(values.to!) || Number(values.from) > Number(values.to))) {
     throw new Refused(["--from and --to want word indices, --from no later than --to"]);
   }
-  const from = Number(values.from);
-  const to = Number(values.to);
-  const name = values.name ?? `window-${from}-${to}`;
-  if (!/^[A-Za-z0-9_-]{1,64}$/.test(name)) throw new Refused(["--name wants letters, digits, - and _"]);
+  if (values.name !== undefined && !/^[A-Za-z0-9_-]{1,64}$/.test(values.name)) throw new Refused(["--name wants letters, digits, - and _"]);
   const allowShort = values["allow-short"] === true;
+  if (duration > MAX_S + EPS || (duration < MIN_S - EPS && !allowShort)) throw new Refused([`--duration is ${duration.toFixed(2)} s, want 4 to 8 s`]);
   const vocals = requireFile(fromCaller(values.vocals), "--vocals");
   const wordsFile = requireFile(fromCaller(values.words), "--words");
   const words = readWords(wordsFile);
-  if (to >= words.length) throw new Refused([`--to ${to} is past the last word (${words.length - 1})`]);
+  if (given && Number(values.to) >= words.length) throw new Refused([`--to ${values.to} is past the last word (${words.length - 1})`]);
+
+  // The window, in song time: it starts and ends in word gaps, and holds the phrase's words.
+  const windowEnd = songT0 + duration;
+  const span = (w: Word) => `${w.i} ${shown(w.w)} (${w.t0.toFixed(2)} to ${w.t1.toFixed(2)})`;
+  const inside = (t: number) => words.find((w) => t > w.t0 + EPS && t < w.t1 - EPS);
+  const atStart = inside(songT0);
+  const atEnd = inside(windowEnd);
+  const edges: string[] = [];
+  if (atStart) edges.push(`the window starts at ${songT0.toFixed(2)} s inside word ${span(atStart)}: start it in a word gap`);
+  if (atEnd) edges.push(`the window ends at ${windowEnd.toFixed(2)} s inside word ${span(atEnd)}: end it in a word gap`);
+  if (edges.length > 0) throw new Refused(edges);
+  const where = `(${songT0.toFixed(2)} to ${windowEnd.toFixed(2)} s)`;
+  let from: number;
+  let to: number;
+  if (given) {
+    from = Number(values.from);
+    to = Number(values.to);
+    const outside = words.slice(from, to + 1).filter((w) => w.t0 < songT0 - EPS || w.t1 > windowEnd + EPS);
+    if (outside.length > 0) throw new Refused(outside.map((w) => `word ${span(w)} is outside the window ${where}`));
+  } else {
+    const starting = words.filter((w) => w.t0 >= songT0 - START_SLACK - EPS && w.t0 < windowEnd - END_SLACK - EPS);
+    if (starting.length === 0) throw new Refused([`no word starts inside the window ${where}`]);
+    from = starting[0].i;
+    to = starting.at(-1)!.i;
+  }
+  const name = values.name ?? `window-${from}-${to}`;
   const out = fromCaller(values.out);
   const problem = outProblem(out);
   if (problem) throw new Refused([problem]);
@@ -247,15 +290,12 @@ async function main(): Promise<number> {
   try {
     const samples = await decode(vocals, temp);
     const energy = frames10(samples);
-    const windowStart = Math.max(0, from > 0 ? words[from - 1].t1 : 0);
-    const gates = phrases(words, from, to, energy, windowStart);
+    // A phrase never starts before the window, nor before the end of the word ahead.
+    const windowStart = Math.max(songT0, from > 0 ? words[from - 1].t1 : 0);
+    const gates = phrases(words, from, to, energy, windowStart, windowEnd);
     const t0 = gates[0].t0;
     const t1 = gates.at(-1)!.t1;
-    const length = t1 - t0;
-    if (length > MAX_S || (length < MIN_S && !allowShort)) {
-      throw new Refused([`window is ${length.toFixed(2)} s (${t0.toFixed(2)} to ${t1.toFixed(2)}), want 4 to 8 s`]);
-    }
-    const { pcm, rms, peak } = render(samples, t0, length, gates);
+    const { pcm, rms, peak } = render(samples, songT0, duration, gates);
     const wavBytes = wav(pcm);
     writeFileSync(join(temp, "window.wav"), wavBytes);
     const mp3 = join(temp, "window.mp3");
@@ -268,11 +308,15 @@ async function main(): Promise<number> {
     const r = (v: number, d = 4) => Math.round(v * 10 ** d) / 10 ** d;
     writeReport(out, "window", {
       ok: true,
-      inputs: { vocals, words: wordsFile, from, to, allow_short: allowShort },
+      inputs: { vocals, words: wordsFile, song_t0: songT0, duration, from: given ? from : null, to: given ? to : null, allow_short: allowShort },
       outputs: { wav: `${name}.wav`, mp3: `${name}.mp3`, report: "window-report.json" },
+      // The file is [song_t0, song_t0 + duration] of the song; the voice in it runs t0 to t1.
+      song_t0: songT0,
+      duration,
+      from,
+      to,
       t0: r(t0),
       t1: r(t1),
-      length: r(length),
       tail: r(gates.at(-1)!.tail),
       phrases: gates.map((g) => ({ t0: r(g.t0), t1: r(g.t1), words: [g.first, g.last] })),
       words: words.slice(from, to + 1),
@@ -281,7 +325,7 @@ async function main(): Promise<number> {
       format: { wav: "16-bit PCM, 44.1 kHz, mono", mp3: "192 kbps" },
     });
     console.log(
-      `window: ${name}, words ${from} to ${to}, ${t0.toFixed(2)} to ${t1.toFixed(2)} s (${length.toFixed(2)} s), ${dbfs(rms).toFixed(1)} dBFS RMS, peak ${dbfs(peak).toFixed(1)} dBFS`,
+      `window: ${name}, words ${from} to ${to}, song ${songT0.toFixed(2)} to ${windowEnd.toFixed(2)} s (${duration.toFixed(2)} s), voice ${t0.toFixed(2)} to ${t1.toFixed(2)} s, ${dbfs(rms).toFixed(1)} dBFS RMS, peak ${dbfs(peak).toFixed(1)} dBFS`,
     );
   } finally {
     rmSync(temp, { recursive: true, force: true });

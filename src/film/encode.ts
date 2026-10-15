@@ -12,13 +12,15 @@ import { RENDER_TIMEOUT, audioSeconds, moveIn, must, probeVideo, type VideoProbe
 // chapters' sum within 0.5 s, the three BT.709 tags must be there, and the rate 24 fps; a file
 // that does not measure up is a failure of the encode (exit 1): nothing caps the length, so an
 // overrun shows as well as a shortfall (the safety net). Refused before any encode: a mix shorter
-// than the chapters by more than a frame or longer by more than 0.5 s, and, unless
+// than the chapters by more than a frame or longer by more than a frame (1/24 s plus 5 ms), and, unless
 // --allow-unramped, a chapter whose tokens sidecar beside it (`<name>.tokens.json`, written by
 // film:chapter and film:reframe) says `ramp: false` (the test-only --no-ramp) or that has no
 // sidecar at all (fail closed).
 
 const COMMAND = "film:encode";
 const FPS = 24;
+const MIX_OVER = 1 / FPS + 0.005; // one frame, and 5 ms for the probe's rounding
+const READBACK = 0.5; // the encoded files' duration against the chapters': ffprobe's rounding of AAC priming and the last frame
 
 const tags = ["-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709", "-color_range", "tv"];
 
@@ -39,7 +41,7 @@ function ramped(file: string): "yes" | "no" | "unknown" {
 function check(name: string, p: VideoProbe | null, want: { duration: number; width: number; height: number }): string[] {
   if (!p) return [`${name} cannot be read back`];
   const problems: string[] = [];
-  if (Math.abs(p.duration - want.duration) > 0.5) problems.push(`${name} runs ${p.duration.toFixed(3)} s, the chapters ${want.duration.toFixed(3)} s`);
+  if (Math.abs(p.duration - want.duration) > READBACK) problems.push(`${name} runs ${p.duration.toFixed(3)} s, the chapters ${want.duration.toFixed(3)} s`);
   if (p.fps !== FPS) problems.push(`${name} runs at ${p.fps} fps, want ${FPS}`);
   for (const [key, value] of [["color_primaries", p.color_primaries], ["color_transfer", p.color_transfer], ["color_space", p.color_space]] as const) {
     if (value !== "bt709") problems.push(`${name} has ${key} ${value}, want bt709`);
@@ -87,8 +89,9 @@ async function main(): Promise<number> {
   if (mixSeconds !== null && probes.length === chapters.length && mixSeconds < sum - 1 / FPS) {
     problems.push(`--mix runs ${mixSeconds.toFixed(3)} s, shorter than the chapters (${sum.toFixed(3)} s)`);
   }
-  if (mixSeconds !== null && probes.length === chapters.length && mixSeconds > sum + 0.5) {
-    problems.push(`--mix runs ${mixSeconds.toFixed(3)} s, longer than the chapters (${sum.toFixed(3)} s) by more than 0.5 s`);
+  // Longer by more than a frame: the master's sound would run on past its picture (or drift).
+  if (mixSeconds !== null && probes.length === chapters.length && mixSeconds > sum + MIX_OVER) {
+    problems.push(`--mix runs ${mixSeconds.toFixed(3)} s, longer than the chapters (${sum.toFixed(3)} s) by more than a frame`);
   }
   const out = fromCaller(values.out);
   const issue = outProblem(out);

@@ -63,7 +63,7 @@ npm --prefix /opt/studio run film:stems -- --in <song.wav> --out <dir>
 npm --prefix /opt/studio run film:beats -- --drums <drums.wav> --out <dir> [--lyrics <lyrics.txt> [--words <words.json>]] [--downbeat-phase N] [--tempo-range low,high]
 npm --prefix /opt/studio run film:words -- --vocals <vocals.wav> --lyrics <lyrics.txt> --out <dir> [--display <display.txt>] [--expect <words.json>] [--min-conf X]
 npm --prefix /opt/studio run film:hits -- --stems <dir> --mix <song.wav> --out <dir> [--beats <beats.json>]
-npm --prefix /opt/studio run film:window -- --vocals <vocals.wav> --words <words.json> --from N --to N --out <dir> [--name <id>] [--allow-short (tests only)]
+npm --prefix /opt/studio run film:window -- --vocals <vocals.wav> --words <words.json> --song-t0 <s> --duration <s> --out <dir> [--from N --to N] [--name <id>] [--allow-short (tests only)]
 npm --prefix /opt/studio run film:audit -- --board <shots.json> --beats <beats.json> --words <words.json> --hits <hits.json> --display <display.txt> --out <dir> [--lead-share 0.7] [--motion-seconds N] [--motion-clips N] [--taboo word,word] [--hooks "A|B|C"] [--defer provenance] [--walk-report <walk-report.json>] [--recordings <recordings.json>]
 npm --prefix /opt/studio run film:sheet -- --board <shots.json> --plates <dir> --out <dir>
 npm --prefix /opt/studio run film:depth -- --plate <plate.png> --out <dir>
@@ -523,13 +523,15 @@ failure: `words: 8 of 12 within 0.10 s of the expected times, want at least 90 p
 then `word 3 "we": starts +0.13 s, ends +0.00 s off` for each word off (up to 20).
 The ear check, in `words-report.json` (`ear_check`, at most five spots, most
 urgent first; `flags` holds them all) and printed as `ear check: ...` lines:
-`letters` (a lyric line with no letters, or an all-caps token sung letter by
-letter), `order` (a word starting over 0.05 s before the one ahead), `gap` (over
+`letters` (an all-caps token sung letter by letter), `order` (a word starting over 0.05 s before the one ahead), `gap` (over
 1 s between two words of a line), `verylow` (`conf` under 0.1), `length` (a word
 over 1.2 s, or over three times its line's median), `lowconf` (`conf` under 0.3,
 or a time from the fallback). With `--display`, each display line must consume
 exactly its lyric line's words (`TEXT|n` shows TEXT over n words, n defaults to
-1, `|0` rides on the next token), else it is refused before any work.
+1, `|0` rides on the next token), else it is refused before any work. A lyric
+line with no letters (`...`) is refused too, one line each, never dropped: the
+display, the board and the chapter engine count lines by the sheet, so a
+dropped line would move every line after it.
 
 `film:hits --stems <dir> --mix <song.wav> --out <dir>`: `kick` (drum-stem onsets
 at 30 to 150 Hz), `snare` (150 Hz to 5 kHz) and `hat` (6 to 16 kHz), a snare or
@@ -549,23 +551,35 @@ frame at 24 fps, scaled 0 to 1 (all zeros without a bass stem). The folder needs
 `drums.wav` and `vocals.wav`; `bass.wav` and `other.wav` are used when there;
 the report lists which (`used`, `absent`).
 
-`film:window --vocals <vocals.wav> --words <words.json> --from N --to N --out <dir> [--name <id>]`:
-the clean vocal window for a sung clip, one phrase by word indices, cut with
-ffmpeg. It starts 0.05 s before word `--from` (never before the end of the word
-ahead) and ends in the gap after word `--to`. Words are merged into phrases
-across gaps of 0.35 s or less; each phrase is kept from 0.05 s before its first
-word to its last word's end plus a release tail that follows the stem's 10 ms
-energy until it falls 24 dB under the phrase's peak (at least the 15 ms fade, at
-most 0.40 s, never past the next word's start less 0.05 s); 15 ms
-raised-cosine ramps on every gate edge and silence elsewhere. The kept part is
-normalised to -16 dBFS RMS and limited to peaks at or under -1 dBFS (a 5 ms
+`film:window --vocals <vocals.wav> --words <words.json> --song-t0 <s> --duration <s> --out <dir> [--from N --to N] [--name <id>]`:
+the clean vocal window for a sung clip (toolkit item 14). `--song-t0` is the
+shot's start and `--duration` the clip's length, both in song time: the stem is
+cut at `[song_t0, song_t0 + duration]`, so the file's first sample is song time
+`song_t0` and the file is exactly `duration` long. That `song_t0` is the clip
+file's `song_t0`: `film:edl` plays the take from `in = t0 - song_t0 + lag_s`,
+and `film:sync --song-t0` takes the same value. A shot cut on a beat in the
+silence before the singer keeps its silence; the window is never moved to the
+voice. The phrase's words are `--from` to `--to` (both or neither), or, without
+them, the words that start inside `[song_t0 - 0.02, song_t0 + duration - 0.08)`.
+Refused (exit 2) with the word named: a window that starts or ends inside a
+word (`the window starts at 1.16 s inside word 0 "the" (1.00 to 1.31): start it in a word gap`),
+a word of `--from`/`--to` outside the window, and a window no word starts in.
+Words are merged into phrases across gaps of 0.35 s or less; each phrase is
+kept from 0.05 s before its first word (never before the window's start or the
+end of the word ahead) to its last word's end plus a release tail that follows
+the stem's 10 ms energy until it falls 24 dB under the phrase's peak (at least
+the 15 ms fade, at most 0.40 s, never past the next word's start less 0.05 s
+nor the window's end); 15 ms raised-cosine ramps on every gate edge and silence
+elsewhere, so a word of the window outside the phrase is silent. The kept part
+is normalised to -16 dBFS RMS and limited to peaks at or under -1 dBFS (a 5 ms
 lookahead limiter, then the level again, until both hold). It writes
 `<name>.wav` (16-bit, 44.1 kHz, mono) and `<name>.mp3` (192 kbps; `<name>`
-defaults to `window-<from>-<to>`) and `window-report.json` with `t0`, `t1`,
-`length`, `tail`, the `phrases`, the `words`, `rms_dbfs` and `peak_dbfs`. A
-window under 4 s or over 8 s is refused with its length. `--allow-short` lifts
-the 4 s floor; it exists for the kit's tests (the test song's phrases are
-short) and a production run never passes it.
+defaults to `window-<from>-<to>`) and `window-report.json` with `song_t0`,
+`duration`, `from`, `to`, the voice's `t0` and `t1` in song time, `tail`, the
+`phrases`, the `words`, `rms_dbfs` and `peak_dbfs`. A `--duration` under 4 s or
+over 8 s is refused. `--allow-short` lifts the 4 s floor; it exists for the
+kit's tests (the test song's phrases are short) and a production run never
+passes it.
 
 ### The board: `film:audit`, `film:sheet`, `film:depth`, `film:edl`
 
@@ -587,7 +601,7 @@ dither); a plate key or clip id that is not letters, digits, `.`, `-` and `_`
 problem: the audit's `todo` gate reports it.
 
 `film:audit` runs every gate of the storyboard wiki's audit, and the kit's
-three more, over the board and the analysis. Each gate's result (`pass`,
+four more, over the board and the analysis. Each gate's result (`pass`,
 `fail`, `deferred` or `skipped`), the shots it names and its problems go in
 `audit-report.json`, with the board's sha256 (an approval is tied to it), a
 summary and the warnings. Any failing gate is exit 3, one line per gate:
@@ -596,9 +610,10 @@ summary and the warnings. Any failing gate is exit 3, one line per gate:
 | Gate | Fails when |
 |---|---|
 | `tile` | a gap or an overlap between shots; the first shot not at 0, the last not at the song's end (`beats.json`'s duration); the board's `duration` not the song's |
+| `chapters` | the chapters not tiling the song from 0 to its end (a gap or an overlap over 0.03 s, the first not at 0, the last not at the song's end, or no chapters); a shot not inside its chapter (the one it overlaps most) within 0.03 s. Each chapter renders its own frames and `film:encode` joins them, so a gap or an overlap would shift the picture against the mix |
 | `cuts` | a cut more than 0.03 s from a beat, from a hit in `hits.json`, or from the `hit` its shot declares |
 | `sections` | a shot's `section` that is not a section of the beat map |
-| `words` | a word (`words.json`) that starts in a shot whose `lines` leave its line out, or whose `type` has no text for it |
+| `words` | a word (`words.json`) that starts in a shot whose `lines` leave its line out, or whose `type` has no text for it (a `type` entry for the line with empty text types its display line, as the chapter engine fills it; with neither, it fails) |
 | `graphics` | a lyric line (from `display.txt`, or listed by a shot) with no device naming it |
 | `lead` | her seconds on screen (`lead_on_screen`) under `--lead-share` of the song (default 0.7) |
 | `budget` | the sung and motion shots' seconds over `--motion-seconds`, or their clips over `--motion-clips`; `skipped` with neither flag |
@@ -615,7 +630,7 @@ It warns, without failing, when her share is over 85 percent, when two shots in
 a row come in with the same transition (other than `cut`), when a plate no shot
 uses is listed, and when a sung shot's prompt may put a microphone, a hand or
 hair in front of her mouth. At exit 0 it prints
-`audit: 15 gates, all pass: 5 shots, 12.00 s, lead 83.6%, 2 clips (8.92 s)`
+`audit: 16 gates, all pass: 5 shots, 12.00 s, lead 83.6%, 2 clips (8.92 s)`
 (with `(1 deferred)` or `(1 skipped)` when so) and one `warning: ...` line each.
 
 `film:sheet` prints the board for review: `sheet.pdf` (A4 landscape, Chromium
@@ -648,7 +663,15 @@ share and the feather in pixels.
 list"). A sung or motion shot plays its clip's delivered take (`<clips>/<clip>.json`,
 the take with `status: delivered`, a `file`, and the highest `n`) from the
 shot's start: `{segs: [{t0, clip: "<clip>-t<n>", in}]}` with
-`in = t0 - song_t0 + lag_s` (lag 0 when the take has no `sync`). A sung take
+`in = t0 - song_t0 + lag_s` (lag 0 when the take has no `sync`). A seg's
+`clip` holds the take id (`W01-t2`), not the clip id wiki/formats gives: a
+deliberate departure, so the chapter engine finds the take's file
+(`<clips>/W01/take-2.mp4`) from the edit list alone, and a re-rolled take
+changes the edit list. A negative `in` (the take would play from before its
+first frame, so the chapter engine would freeze frame 0 for the difference: the
+clip's `song_t0` is later than the shot's start, the window not cut from it)
+fails, exit 3:
+`edl: "s002" take "W01-t2" would play from -0.114 s (in = 0.976 - song_t0 1.400 + lag 0.310), before its first frame`. A sung take
 whose shot runs past its `sync.synced` spans is cut at its `sync.cut_at` to its
 first cover, which plays from there by its own `song_t0` and lag, down the
 chain. A `genuine` shot with `footage` is `{footage: "<file>"}` (the file the
@@ -663,7 +686,8 @@ delivered take with no `file`, or no clip file is `no take`; a sung take that
 diverges with no cover is `no cover`; a take whose `cut_at` is at or before its
 segment's start is `out of sync`; a clip with nothing usable makes the whole
 shot `{plate}`. A sung or motion shot left with neither a take nor a plate
-fails: exit 3, one line each, the report written and no `edl.json`. The summary
+fails: exit 3, one line each, the report written (`failures`: each shot and
+why) and no `edl.json`. The summary
 line counts the shots from takes, plates, footage and design. The report also gives, per sung shot, its sung
 seconds (each word of `--words` padded 30 ms, merged under 0.12 s) and how many
 of them the in-sync spans cover. A clip file that does not parse, or whose `id`
@@ -817,8 +841,9 @@ that soundtrack.
   latest (`missing_tail_s` in the report). `cut_at` is the last eighth note
   (`beats.json`'s beats and the midpoints between them) at or before
   `diverge_at`.
-- Times are song time: `--song-t0` plus the window time (the clip's
-  `song_t0`, the song time of the window's first sample).
+- Times are song time: `--song-t0` plus the window time. `--song-t0` is the
+  clip's `song_t0`: the song time of the window's first sample, which is the
+  shot's start (`film:window --song-t0`), not the first word.
 - It writes `<take>-sync.png` (our window's spectrogram, the take's on the same
   timeline, the NCC curve with the 0.2 line, the divergence in red) and
   `sync-report.json`. The report's `sync` is the take's entry for its clip
@@ -983,10 +1008,12 @@ given), muxes the mix (AAC 256k) and writes `master.mp4` (libx264 CRF 16,
 preset slow, yuv420p, converted to and tagged BT.709 primaries, transfer and
 matrix) and `review.mp4` (CRF 20, `-maxrate 8M -bufsize 16M`). Both are read
 back with ffprobe: the duration within 0.5 s of the chapters' sum either way
-(nothing caps the length, so a mix that runs on shows as an overrun), the three
+(a tolerance for ffprobe's rounding of AAC priming and the last frame; nothing
+caps the length, so a mix that runs on shows as an overrun), the three
 tags, 24 fps, h264 and AAC, or exit 1 (the safety net). Refused before any
-encode: a mix shorter than the chapters by more than a frame or longer by more
-than 0.5 s; and, unless `--allow-unramped`, a chapter whose tokens sidecar
+encode: a mix shorter or longer than the chapters by more than a frame (1/24 s,
+plus 5 ms for the probe), so the master's sound cannot drift from its picture;
+and, unless `--allow-unramped`, a chapter whose tokens sidecar
 beside it (`<name>.tokens.json`) says `ramp: false`, or that has no sidecar at
 all (fail closed).
 
@@ -1246,6 +1273,8 @@ they need (`htdemucs` for stems; `mms_fa` and `whisper_tiny` for words).
 - `film:words: --vocals <path>, --lyrics <path> and --out <dir> are required`
 - `--min-conf wants a number from 0 to 1`
 - `the lyric sheet has no words to align`
+- one line per lyric line with no letters:
+  `lyric line 1 "..." has no letters to align: write it out in words or take it off the sheet`
 - `--display has N lines, the lyric sheet M`; one line per display line that
   does not consume its words:
   `display line 2 ("We count|3 windows.") shows 5 words, its lyric line has 4`
@@ -1260,12 +1289,19 @@ they need (`htdemucs` for stems; `mms_fa` and `whisper_tiny` for words).
 
 `film:window`:
 
-- `film:window: --vocals <path>, --words <path>, --out <dir>, --from <word> and --to <word> are required`
+- `film:window: --vocals <path>, --words <path>, --out <dir>, --song-t0 <s> and --duration <s> are required`
+- `--song-t0 is "soon", want seconds from 0`, `--duration is "0", want seconds above 0`
+- `--duration is 9.00 s, want 4 to 8 s`
+- `--from and --to go together`
 - `--from and --to want word indices, --from no later than --to`
 - `--to N is past the last word (M)`
 - `--name wants letters, digits, - and _`
 - `--words is not a words.json`
-- `window is 2.31 s (6.91 to 9.22), want 4 to 8 s`
+- `the window starts at 1.16 s inside word 0 "the" (1.00 to 1.31): start it in a word gap`,
+  `the window ends at 5.04 s inside word 6 "windows" (4.73 to 5.35): end it in a word gap`
+- one line per phrase word outside the window:
+  `word 0 "the" (1.00 to 1.31) is outside the window (2.63 to 6.63 s)`
+- `no word starts inside the window (10.60 to 15.60 s)`
 
 The board commands share these: `--X cannot be read` for a path flag that is
 not a readable file, `--board is not a JSON file`, one `--board: ...` line per
@@ -1400,7 +1436,7 @@ and `model depth is not in "/opt/models" (run ...)`.
 `--chapters: "ch02.mp4" cannot be read as a video`, `--chapters: "wide.mp4" measures 320x180, the first 640x360`,
 `--chapters: "ch02.mp4" runs at 30 fps, want 24`, `--mix cannot be read as audio`,
 `--mix runs 2.000 s, shorter than the chapters (3.500 s)`,
-`--mix runs 5.000 s, longer than the chapters (3.500 s) by more than 0.5 s`,
+`--mix runs 3.600 s, longer than the chapters (3.500 s) by more than a frame`,
 `--chapters: "fl.mp4" was rendered with --no-ramp (its sidecar fl.tokens.json says ramp: false); give --allow-unramped to encode it anyway`,
 `--chapters: "ch09.mp4" has no tokens sidecar beside it (ch09.tokens.json) to show how it was rendered; give --allow-unramped to encode it anyway`.
 
@@ -1412,7 +1448,8 @@ and `model depth is not in "/opt/models" (run ...)`.
 Exit `3`, with the report written: `film:words`, the check's line and the words
 off, as in [Listening](#listening-filmstems-filmbeats-filmwords-filmhits-filmwindow),
 with `words.json` written too; `film:audit`, one `gate <name>: ...` line per
-failing gate; `film:edl`, one `edl: "s004" has neither a take nor a plate (clip "W09" has no delivered take)` line
+failing gate; `film:edl`, one `edl: "s004" has neither a take nor a plate (clip "W09" has no delivered take)`
+(or `edl: "s002" take "W01-t2" would play from -0.114 s (...), before its first frame`) line
 per shot, and no `edl.json`; `film:sync`, `sync: "take-2.mp4" does not copy the window (NCC 0.04, want over 0.2)`;
 `film:gate`, `gate: 10/12` and a line per word not drawn; `film:history`, the differing pixel; `film:flash`,
 `flash: 4 flashes in one second between 0.042 and 2.000 s, want at most 3`; `film:mix`,

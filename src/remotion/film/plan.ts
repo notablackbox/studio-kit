@@ -718,8 +718,8 @@ export function tokensSidecar(plan: Plan, a: number, b: number): { fps: number; 
   return { fps: FILM_FPS, chapter: plan.chapter, ramp: plan.ramp, frames };
 }
 
-// The sound events the mix places for this chapter: each device's entrance, each dither and
-// each card that comes in, at song time, inside [t0, t1).
+// The sound events the mix places for this chapter: each device's entrance (its kind's sound)
+// and each dither (a whoosh), at song time, inside [t0, t1). Type cards make no sound.
 export function audioEvents(plan: Plan, t0 = plan.t0, t1 = plan.t1): { t: number; kind: SoundKind; gain: number; shot: string; what: string }[] {
   const events: { t: number; kind: SoundKind; gain: number; shot: string; what: string }[] = [];
   const inside = (t: number) => t >= t0 - 1e-6 && t < t1 - 1e-6;

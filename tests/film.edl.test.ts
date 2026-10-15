@@ -152,6 +152,35 @@ test("a delivered take with no file is no take; a take out of sync from its star
   ]);
 });
 
+test("a take that would play from before its first frame (a negative in) fails: exit 3 naming the shot, the report says why", () => {
+  // W01's window starts at 1.4, after the shot's start (0.976): in = 0.976 - 1.4 + 0.31 < 0.
+  // The chapter engine would freeze the take's first frame for the difference.
+  const clips = clipsCopy("clips-late", (folder) => {
+    const w01 = JSON.parse(readFileSync(join(folder, "W01.json"), "utf8"));
+    w01.song_t0 = 1.4;
+    writeFileSync(join(folder, "W01.json"), JSON.stringify(w01));
+  });
+  const result = film("edl", dir, ARGS("shots.json", clips, "late"));
+  assert.equal(result.status, 3, result.stdout + result.stderr);
+  const why = 'take "W01-t2" would play from -0.114 s (in = 0.976 - song_t0 1.400 + lag 0.310), before its first frame';
+  assert.deepEqual(lines(result.stdout), [`edl: "s002" ${why}`]);
+  const r = report("late");
+  assert.equal(r.ok, false);
+  assert.deepEqual(r.missing, ["s002"]);
+  assert.deepEqual(r.failures, [{ shot: "s002", why }]);
+  assert.equal(existsSync(join(dir, "late", "edl.json")), false);
+
+  // A cover whose window starts after the cut: the cover's segment fails the same way.
+  const covers = clipsCopy("clips-late-cover", (folder) => {
+    const c1 = JSON.parse(readFileSync(join(folder, "W01-c1.json"), "utf8"));
+    c1.song_t0 = 4.2;
+    writeFileSync(join(folder, "W01-c1.json"), JSON.stringify(c1));
+  });
+  const cover = film("edl", dir, ARGS("shots.json", covers, "latecover"));
+  assert.equal(cover.status, 3, cover.stdout + cover.stderr);
+  assert.match(lines(cover.stdout)[0], /^edl: "s002" take "W01-c1-t1" would play from -0\.\d+ s \(in = 3\.987 - song_t0 4\.200 \+ lag 0\.\d+\), before its first frame$/);
+});
+
 test("refusals: one line each on stdout, exit 2, nothing written", () => {
   writeFileSync(join(dir, "afile"), "x");
   const broken = clipsCopy("clips-broken", (folder) => writeFileSync(join(folder, "W02.json"), '{"id": "W02", "takes": "none"}'));

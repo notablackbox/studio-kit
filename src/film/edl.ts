@@ -14,7 +14,9 @@ import { KEY, readBoard, type Shot } from "./lib/board.ts";
 //   shot's plate, with a note in the report;
 // - a genuine shot with footage is `{footage}`, played like a clip;
 // - a still or 2.5D shot is its plate, or `{design: true}` (pure motion design) with none.
-// A sung or motion shot with neither a take nor a plate fails (exit 3). The report also gives, per sung shot,
+// A sung or motion shot with neither a take nor a plate fails (exit 3), and so does a segment
+// whose `in` is negative (the take would have to play from before its first frame: its clip's
+// song_t0 is not where the window was cut). The report's `failures` say why. It also gives, per sung shot,
 // how much of its sung time (from --words) the in-sync spans cover.
 
 const COMMAND = "film:edl";
@@ -136,7 +138,14 @@ function resolve(shot: Shot, clips: Map<string, Clip | null>): Resolved {
     // Cut at or before its own start: nothing of the take is in sync here.
     if (cut !== null && cut <= t + EPS) return hole(clip.id, t, "out of sync", `clip ${shown(clip.id)} is out of sync from ${t.toFixed(3)} s`);
     const lag = sync?.lag_s ?? 0;
-    segs.push({ t0: r4(t), clip: `${clip.id}-t${take.n}`, in: r4(t - clip.song_t0 + lag) });
+    const at = r4(t - clip.song_t0 + lag);
+    // Before the take's first frame: the chapter engine would freeze frame 0 for the difference.
+    // The window was cut from somewhere after the shot's start (its song_t0 is not the shot's).
+    if (at < 0) {
+      const why = `take ${shown(`${clip.id}-t${take.n}`)} would play from ${at.toFixed(3)} s (in = ${t.toFixed(3)} - song_t0 ${clip.song_t0.toFixed(3)} + lag ${lag.toFixed(3)}), before its first frame`;
+      return { entry: null, fallbacks, why, spans, fail: `edl: ${shown(shot.id)} ${why}` };
+    }
+    segs.push({ t0: r4(t), clip: `${clip.id}-t${take.n}`, in: at });
     const end = cut !== null && cut < shot.t1 - EPS ? cut : shot.t1;
     if (sync) for (const [a, b] of sync.synced) spans.push([Math.max(a - SPAN_LEAD, t), Math.min(b, end)]);
     if (end >= shot.t1 - EPS) break;
@@ -219,8 +228,23 @@ async function main(): Promise<number> {
   }
   const inputs = { board: boardFile, clips: clipsDir, words: wordsFile };
   if (missing.length > 0) {
-    writeReport(out, "edl", { ok: false, inputs, outputs: { report: "edl-report.json" }, shots: board.shots.length, fallbacks, missing: missing.map((m) => m.shot), coverage: cover });
-    throw new Failed(missing.map((m) => m.fail ?? `edl: ${shown(m.shot)} has neither a take nor a plate${m.why ? ` (${m.why})` : ""}`));
+    // Each failing shot with why, in the report as on stdout.
+    const failures = missing.map((m) => {
+      const head = `edl: ${shown(m.shot)} `;
+      const line = m.fail ?? `${head}has neither a take nor a plate${m.why ? ` (${m.why})` : ""}`;
+      return { shot: m.shot, why: line.startsWith(head) ? line.slice(head.length) : line, line };
+    });
+    writeReport(out, "edl", {
+      ok: false,
+      inputs,
+      outputs: { report: "edl-report.json" },
+      shots: board.shots.length,
+      fallbacks,
+      missing: missing.map((m) => m.shot),
+      failures: failures.map(({ shot, why }) => ({ shot, why })),
+      coverage: cover,
+    });
+    throw new Failed(failures.map((f) => f.line));
   }
   writeIn(out, "edl.json", JSON.stringify(edl, null, 2) + "\n");
   writeReport(out, "edl", { ok: true, inputs, outputs: { edl: "edl.json", report: "edl-report.json" }, shots: board.shots.length, fallbacks, missing: [], coverage: cover });

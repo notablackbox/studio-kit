@@ -1,7 +1,7 @@
 import { copyFileSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, extname, join, sep } from "node:path";
-import { KIT_ROOT, Refused, fromCaller, outProblem, requireFile, shown } from "./cli.ts";
+import { KIT_ROOT, Refused, fromCaller, outProblem, printable, requireFile, shown } from "./cli.ts";
 import { KEY, readBoard } from "./board.ts";
 import { must, probeVideo } from "./media.ts";
 import { FONT_FILES } from "../../remotion/film/fonts.ts";
@@ -202,7 +202,8 @@ export function prepareChapter(command: string, values: ChapterValues, options: 
   const built = buildPlan({ chapter: chapterId, board: JSON.parse(boardText), edl, words, beats, hits, display, palette, media, ramp, vertical });
   // A shot already refused above is not refused again for the media it then lacks.
   const isMediaLine = (p: string) => /^--(plates|clips|footage):/.test(p);
-  problems.push(...built.problems.filter((p) => !(isMediaLine(p) && [...flagged].some((id) => p.includes(shown(id))))));
+  // The plan quotes board text with JSON.stringify: printed with every control escaped.
+  problems.push(...built.problems.filter((p) => !(isMediaLine(p) && [...flagged].some((id) => p.includes(shown(id))))).map(printable));
   const out = fromCaller(v.out);
   const outIssue = outProblem(out);
   if (outIssue) problems.push(outIssue);
@@ -326,7 +327,7 @@ export async function stageChapter(p: Prepared, extra: Partial<FilmProps> = {}):
       ramp: p.plan.ramp,
       vertical: p.plan.vertical,
     });
-    if (!rebuilt.plan) throw new Refused(rebuilt.problems);
+    if (!rebuilt.plan) throw new Refused(rebuilt.problems.map(printable));
     return { dir, publicDir, propsFile, props, plan: rebuilt.plan };
   } catch (error) {
     rmSync(dir, { recursive: true, force: true });

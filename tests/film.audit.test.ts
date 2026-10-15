@@ -8,7 +8,7 @@ import { boardDir, changedBoard } from "./fixtures/board.ts";
 // film:audit over the fixture board: the passing board, then one board (or one flag) per gate
 // that fails it, the refusals of a malformed board, and the report.
 
-const GATES = ["tile", "cuts", "sections", "words", "graphics", "lead", "budget", "windows", "plates", "banned", "treatments", "todo", "genuine", "hook", "box"];
+const GATES = ["tile", "chapters", "cuts", "sections", "words", "graphics", "lead", "budget", "windows", "plates", "banned", "treatments", "todo", "genuine", "hook", "box"];
 
 type Gate = { gate: string; status: string; shots: string[]; problems: string[] };
 type AuditReport = { ok: boolean; inputs: Record<string, unknown>; outputs: Record<string, unknown>; gates: Gate[]; warnings: string[]; summary: Record<string, number>; board_sha256: string };
@@ -44,11 +44,11 @@ function failsOnly(name: string, board: string, out: string, shots: string[], ex
   return printed[0];
 }
 
-test("the fixture board passes every gate: exit 0 and the report lists all fifteen", () => {
+test("the fixture board passes every gate: exit 0 and the report lists all sixteen", () => {
   const result = audit("shots.json", "pass");
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.equal(result.stderr, "");
-  assert.match(lines(result.stdout)[0], /^audit: 15 gates, all pass: 5 shots, 12\.00 s, lead 83\.6%, 2 clips \(8\.92 s\)$/);
+  assert.match(lines(result.stdout)[0], /^audit: 16 gates, all pass: 5 shots, 12\.00 s, lead 83\.6%, 2 clips \(8\.92 s\)$/);
   const r = report("pass");
   assert.equal(r.ok, true);
   assert.deepEqual(r.gates.map((g) => g.gate), GATES);
@@ -100,11 +100,53 @@ test("the board passes against the analysis the listening commands make from the
 });
 
 test("tile: an overlap fails", () => {
+  // Inside one chapter (ch02), so only the shots' tiling is wrong.
   const board = changedBoard(dir, "tile.json", (_b, shot) => {
-    shot("s003").t1 = 6.955;
+    shot("s004").t1 = 11.372;
   });
-  const line = failsOnly("tile", board, "tile", ["s003", "s004"]);
-  assert.equal(line, 'gate tile: "s003" ends at 6.955 s, after "s004" starts at 6.462 s');
+  const line = failsOnly("tile", board, "tile", ["s004", "s005"]);
+  assert.equal(line, 'gate tile: "s004" ends at 11.372 s, after "s005" starts at 10.883 s');
+});
+
+test("chapters: a gap or an overlap between chapters, a chapter short of the song, a shot across a chapter's edge fail", () => {
+  // A gap of 0.038 s between the chapters; s004 then starts 0.038 s before its chapter.
+  const gap = changedBoard(dir, "chapters.json", (b) => {
+    b.chapters[1].t0 = 6.5;
+  });
+  assert.equal(
+    failsOnly("chapters", gap, "chapters", ["s004"]),
+    'gate chapters: a gap from 6.462 to 6.5 s between "ch01" and "ch02"; "s004" runs 6.462 to 10.883 s, outside chapter "ch02" (6.5 to 12 s)',
+  );
+  // Within 0.03 s passes.
+  const close = changedBoard(dir, "chapters2.json", (b) => {
+    b.chapters[1].t0 = 6.48;
+  });
+  assert.equal(audit(close, "chapters2").status, 0);
+  // An overlap, and the last chapter ending before the song.
+  const overlap = changedBoard(dir, "chapters3.json", (b) => {
+    b.chapters[0].t1 = 6.954;
+    b.chapters[1].t1 = 11.86;
+  });
+  assert.equal(
+    failsOnly("chapters", overlap, "chapters3", ["s005"]),
+    'gate chapters: "ch01" ends at 6.954 s, after "ch02" starts at 6.462 s; the last chapter "ch02" ends at 11.86 s, the song at 12 s; "s005" runs 10.883 to 12 s, outside chapter "ch02" (6.462 to 11.86 s)',
+  );
+  // The chapters tile, but their edge falls inside s003: the shot is mostly in ch02 and starts
+  // before it.
+  const across = changedBoard(dir, "chapters4.json", (b) => {
+    b.chapters[0].t1 = 5.9;
+    b.chapters[1].t0 = 5.9;
+  });
+  assert.equal(failsOnly("chapters", across, "chapters4", ["s003"]), 'gate chapters: "s003" runs 5.473 to 6.462 s, outside chapter "ch02" (5.9 to 12 s)');
+  // A chapter that starts late, and no chapters at all.
+  const late = changedBoard(dir, "chapters5.json", (b) => {
+    b.chapters[0].t0 = 0.5;
+  });
+  assert.equal(failsOnly("chapters", late, "chapters5", ["s001"]), 'gate chapters: the first chapter "ch01" starts at 0.5 s, not 0; "s001" runs 0 to 0.976 s, outside chapter "ch01" (0.5 to 6.462 s)');
+  const none = changedBoard(dir, "chapters6.json", (b) => {
+    b.chapters = [];
+  });
+  assert.equal(failsOnly("chapters", none, "chapters6", []), "gate chapters: the board has no chapters");
 });
 
 test("tile: a gap, a late start and a short end fail", () => {
@@ -132,13 +174,17 @@ test("cuts: a cut off the beat fails; on a hit from hits.json or a declared hit 
   });
   assert.equal(audit(declared, "cuts2").status, 0);
 
-  // The edge: 0.031 s off fails, 0.029 s passes.
-  const edge = changedBoard(dir, "cuts3.json", (_b, shot) => {
+  // The edge: 0.031 s off fails, 0.029 s passes (the chapters' edge moves with the cut).
+  const edge = changedBoard(dir, "cuts3.json", (b, shot) => {
+    b.chapters[0].t1 = 6.431;
+    b.chapters[1].t0 = 6.431;
     shot("s003").t1 = 6.431;
     shot("s004").t0 = 6.431;
   });
   assert.equal(failsOnly("cuts", edge, "cuts3", ["s004"]), 'gate cuts: the cut at 6.431 s into "s004" is 0.031 s from the nearest beat');
-  const inside = changedBoard(dir, "cuts4.json", (_b, shot) => {
+  const inside = changedBoard(dir, "cuts4.json", (b, shot) => {
+    b.chapters[0].t1 = 6.433;
+    b.chapters[1].t0 = 6.433;
     shot("s003").t1 = 6.433;
     shot("s004").t0 = 6.433;
   });
@@ -165,6 +211,32 @@ test("words: a sung word in a shot whose lines or type leave its line out fails"
   });
   const typed = failsOnly("words", notTyped, "words2", ["s004"]);
   assert.equal(typed, 'gate words: "s004" has words 7 to 8 of line 2 and types no text for it');
+
+  // An entry with empty text draws its line's display line (as the chapter engine fills it):
+  // it passes.
+  const fromDisplay = changedBoard(dir, "words3.json", (_b, shot) => {
+    (shot("s004").type as Record<string, unknown>[])[0].text = "";
+    (shot("s002").type as Record<string, unknown>[])[1].text = "  ";
+  });
+  const passed = audit(fromDisplay, "words3");
+  assert.equal(passed.status, 0, passed.stdout);
+  assert.equal(gate(report("words3"), "words").status, "pass");
+
+  // Empty text and no display line for its line: still no text. words.json puts word 11 on a
+  // line 4 the display (four lines) does not have; s004 lists it and types it empty.
+  const words = JSON.parse(readFileSync(join(dir, "analysis", "words.json"), "utf8"));
+  words.words[11].line = 4;
+  writeFileSync(join(dir, "words-line4.json"), JSON.stringify(words));
+  const noDisplay = changedBoard(dir, "words4.json", (_b, shot) => {
+    const s = shot("s004");
+    s.lines = [2, 3, 4];
+    (s.type as Record<string, unknown>[]).push({ line: 4, mode: "subtitle", text: "", placement: "lower third" });
+    (s.devices as Record<string, unknown>[]).push({ kind: "label", anchor: { slot: "right" }, params: { text: "LIGHT" }, key: "W", line: 4 });
+  });
+  const result = film("audit", dir, ["--board", noDisplay, ...ANALYSIS.slice(0, 2), "--words", "words-line4.json", ...ANALYSIS.slice(4), "--out", "words4", ...FLAGS]);
+  assert.equal(result.status, 3, result.stdout + result.stderr);
+  assert.deepEqual(lines(result.stdout), ['gate words: "s004" has word 11 of line 4 and types no text for it']);
+  assert.deepEqual(gate(report("words4"), "words").shots, ["s004"]);
 });
 
 test("graphics: a lyric line with no explaining graphic fails", () => {
@@ -190,7 +262,7 @@ test("budget: clip seconds over --motion-seconds, or clips over --motion-clips, 
   const none = audit("shots.json", "budget3", [], FLAGS.slice(0, 6));
   assert.equal(none.status, 0, none.stdout);
   assert.equal(gate(report("budget3"), "budget").status, "skipped");
-  assert.match(lines(none.stdout)[0], /^audit: 15 gates, all pass \(1 skipped\): /);
+  assert.match(lines(none.stdout)[0], /^audit: 16 gates, all pass \(1 skipped\): /);
 });
 
 test("windows: a sung shot under 4 s, a sung shot starting in a word, a short motion clip fail", () => {
@@ -325,7 +397,7 @@ test("genuine: footage not recorded fails; --recordings counts; --defer provenan
   assert.equal(deferred.status, 0, deferred.stdout);
   assert.equal(gate(report("genuine5"), "genuine").status, "deferred");
   assert.deepEqual(gate(report("genuine5"), "genuine").shots, ["s003"]);
-  assert.match(lines(deferred.stdout)[0], /^audit: 15 gates, all pass \(1 deferred\): /);
+  assert.match(lines(deferred.stdout)[0], /^audit: 16 gates, all pass \(1 deferred\): /);
   assert.deepEqual(report("genuine5").inputs.defer, ["provenance"]);
 
   // --defer provenance never defers a genuine shot that names nothing.

@@ -152,19 +152,15 @@ test("--min-conf 0 cannot pass a weak alignment: the gate stays at confidence 0.
 
 test("the ear check lists at most five spots, most urgent first", () => {
   const sheet = tempDir("words-ear");
-  // A line with no letters (line 1), and an all-caps token sung letter by letter (word 7, "HOLD").
-  writeFileSync(join(sheet, "lyrics.txt"), "[Verse]\nthe city wakes\n...\nwe count the windows\n[Chorus]\nHOLD on\nhold the light\n");
+  // An all-caps token sung letter by letter (word 7, "HOLD").
+  writeFileSync(join(sheet, "lyrics.txt"), "[Verse]\nthe city wakes\nwe count the windows\n[Chorus]\nHOLD on\nhold the light\n");
   const result = film("words", dir, ["--vocals", "vocals.wav", "--lyrics", join(sheet, "lyrics.txt"), "--out", "f"]);
   assert.equal(result.status, 0, result.stdout + result.stderr);
   const report = JSON.parse(readFileSync(join(dir, "f", "words-report.json"), "utf8"));
-  assert.ok(report.ear_check.length >= 2 && report.ear_check.length <= 5);
-  assert.deepEqual(report.ear_check.slice(0, 2).map((s: { flag: string; line?: number; i?: number }) => [s.flag, s.line ?? null, s.i ?? null]), [
-    ["letters", 1, null],
-    ["letters", null, 7],
-  ]);
+  assert.ok(report.ear_check.length >= 1 && report.ear_check.length <= 5);
+  assert.deepEqual(report.ear_check.slice(0, 1).map((s: { flag: string; line?: number; i?: number }) => [s.flag, s.line ?? null, s.i ?? null]), [["letters", null, 7]]);
   for (const spot of report.ear_check) assert.ok(["letters", "order", "gap", "verylow", "length", "lowconf"].includes(spot.flag));
   const out = lines(result.stdout);
-  assert.ok(out.includes("ear check: line 1 has no letters"), result.stdout);
   assert.ok(out.some((l) => /^ear check: word 7 "HOLD" at \d+\.\d\d s is sung letter by letter$/.test(l)), result.stdout);
 });
 
@@ -186,6 +182,8 @@ test("a display line that does not consume exactly its words is refused, naming 
 
 test("refusals: one line each on stdout, exit 2, nothing written", () => {
   writeFileSync(join(dir, "empty.txt"), "[Verse]\n\n");
+  // A lyric line with no letters is refused, not dropped: its words would shift every later line.
+  writeFileSync(join(dir, "dots.txt"), "[Verse]\nthe city wakes\n...\nwe count the windows\n[Chorus]\nhold on\n-- !\nhold the light\n");
   writeFileSync(join(dir, "noise.wav"), "not audio");
   const cases: [string[], string, NodeJS.ProcessEnv?][] = [
     [["--vocals", "vocals.wav", "--out", "x"], "film:words: --vocals <path>, --lyrics <path> and --out <dir> are required"],
@@ -203,6 +201,13 @@ test("refusals: one line each on stdout, exit 2, nothing written", () => {
     assert.deepEqual(lines(result.stdout), [line], args.join(" "));
     assert.equal(existsSync(join(dir, "x")), false);
   }
+  const dots = film("words", dir, ["--vocals", "vocals.wav", "--lyrics", "dots.txt", "--out", "x"]);
+  assert.equal(dots.status, 2, dots.stdout + dots.stderr);
+  assert.deepEqual(lines(dots.stdout), [
+    'lyric line 1 "..." has no letters to align: write it out in words or take it off the sheet',
+    'lyric line 4 "-- !" has no letters to align: write it out in words or take it off the sheet',
+  ]);
+  assert.equal(existsSync(join(dir, "x")), false);
 });
 
 test("anything unexpected is exit 1 with one line on stderr", () => {

@@ -7,9 +7,12 @@ import { lyricLines, readBoard, type Board, type Shot } from "./lib/board.ts";
 // film:audit: the board's gates (claudia.gallery's storyboard wiki, "The audit", and the kit's
 // v0.2.0 additions), each with its result and the shots that fail it:
 //   tile        the shots tile the song: no gap, no overlap, from 0 to the song's end;
+//   chapters    the chapters tile the song the same way (within 0.03 s), and every shot lies
+//               inside its chapter (the one it overlaps most), within 0.03 s;
 //   cuts        every cut within 0.03 s of a beat, a hit in hits.json, or the hit its shot declares;
 //   sections    every shot's section is a section of the beat map;
-//   words       every word starts in a shot that lists its line and types it;
+//   words       every word starts in a shot that lists its line and types it (an entry with
+//               empty text types its line's display line, as the chapter engine draws it);
 //   graphics    every lyric line has an explaining graphic (a device naming the line);
 //   lead        her share of the screen at or above --lead-share (default 0.7);
 //   budget      planned clip seconds and clips within --motion-seconds and --motion-clips;
@@ -32,6 +35,7 @@ const COMMAND = "film:audit";
 const CUT_TOLERANCE = 0.03;
 const EPS = 1e-6;
 const TILE_EPS = 0.001;
+const CHAPTER_EPS = 0.03;
 const SUNG = [4, 8];
 const MOTION = [4, 12];
 const LEAD_WARN = 0.85;
@@ -39,7 +43,7 @@ const LEAD_WARN = 0.85;
 const PLACEHOLDER = /(?<![\p{L}\p{N}])(?:todo|tbd)(?![\p{L}\p{N}])|\?\?\?/iu;
 // In typed lyric text: capitals only, since "todo" is a word a lyric may sing.
 const TYPED_PLACEHOLDER = /(?<![\p{L}\p{N}])(?:TODO|TBD)(?![\p{L}\p{N}])|\?\?\?/u;
-const GATES = ["tile", "cuts", "sections", "words", "graphics", "lead", "budget", "windows", "plates", "banned", "treatments", "todo", "genuine", "hook", "box"] as const;
+const GATES = ["tile", "chapters", "cuts", "sections", "words", "graphics", "lead", "budget", "windows", "plates", "banned", "treatments", "todo", "genuine", "hook", "box"] as const;
 
 type GateName = (typeof GATES)[number];
 type Status = "pass" | "fail" | "deferred" | "skipped";
@@ -52,6 +56,7 @@ type Analysis = {
   words: Word[];
   gaps: { t0: number; t1: number }[];
   lineCount: number;
+  display: string[];
   hits: number[];
 };
 
@@ -124,6 +129,7 @@ function readAnalysis(paths: { beats: string; words: string; hits: string; displ
     words: wordList,
     gaps,
     lineCount,
+    display,
     hits: (hits.hits as { t: number }[]).map((h) => h.t),
   };
 }
@@ -197,6 +203,38 @@ export function auditBoard(board: Board, analysis: Analysis, options: Options): 
     add("tile", problems, ids);
   }
 
+  // chapters: they tile [0, the song's end] within 0.03 s (each chapter renders its own frames
+  // and film:encode joins them), and each shot lies inside the chapter it overlaps most.
+  {
+    const problems: string[] = [];
+    const ids: string[] = [];
+    const chapters = board.chapters; // sorted by t0 when read
+    if (chapters.length === 0) problems.push("the board has no chapters");
+    else {
+      const first = chapters[0];
+      const last = chapters[chapters.length - 1];
+      if (Math.abs(first.t0) > CHAPTER_EPS + EPS) problems.push(`the first chapter ${q(first.id)} starts at ${num(first.t0)} s, not 0`);
+      for (let k = 1; k < chapters.length; k++) {
+        const [a, b] = [chapters[k - 1], chapters[k]];
+        if (a.t1 > b.t0 + CHAPTER_EPS + EPS) problems.push(`${q(a.id)} ends at ${num(a.t1)} s, after ${q(b.id)} starts at ${num(b.t0)} s`);
+        else if (b.t0 > a.t1 + CHAPTER_EPS + EPS) problems.push(`a gap from ${num(a.t1)} to ${num(b.t0)} s between ${q(a.id)} and ${q(b.id)}`);
+      }
+      if (Math.abs(last.t1 - song) > CHAPTER_EPS + EPS) problems.push(`the last chapter ${q(last.id)} ends at ${num(last.t1)} s, the song at ${num(song)} s`);
+      for (const shot of shots) {
+        const overlap = (c: (typeof chapters)[number]) => Math.min(shot.t1, c.t1) - Math.max(shot.t0, c.t0);
+        const home = chapters.reduce((best, c) => (overlap(c) > overlap(best) ? c : best), chapters[0]);
+        if (overlap(home) <= 0) {
+          problems.push(`${q(shot.id)} runs ${num(shot.t0)} to ${num(shot.t1)} s, in no chapter`);
+          ids.push(shot.id);
+        } else if (shot.t0 < home.t0 - CHAPTER_EPS - EPS || shot.t1 > home.t1 + CHAPTER_EPS + EPS) {
+          problems.push(`${q(shot.id)} runs ${num(shot.t0)} to ${num(shot.t1)} s, outside chapter ${q(home.id)} (${num(home.t0)} to ${num(home.t1)} s)`);
+          ids.push(shot.id);
+        }
+      }
+    }
+    add("chapters", problems, ids);
+  }
+
   // cuts: every shot start but the first, and every end not met by the next start.
   {
     const problems: string[] = [];
@@ -246,7 +284,7 @@ export function auditBoard(board: Board, analysis: Analysis, options: Options): 
         if (!shot.lines.includes(line)) {
           problems.push(`${q(shot.id)} has ${span} of line ${line} and does not list the line`);
           ids.push(shot.id);
-        } else if (!shot.type.some((t) => t.line === line && t.text.trim() !== "")) {
+        } else if (!shot.type.some((t) => t.line === line && (t.text.trim() !== "" || (analysis.display[line] ?? "").trim() !== ""))) {
           problems.push(`${q(shot.id)} has ${span} of line ${line} and types no text for it`);
           ids.push(shot.id);
         }

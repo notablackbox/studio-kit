@@ -148,6 +148,10 @@ test("refusals before any work: flags, chapter, range, a missing take, footage o
   const long = "The city WAKES-AND-EVERY-SINGLE-WINDOW-ON-THE-BLOCK-IS-LIT-UP";
   wide.shots[1].type[0] = { line: 0, mode: "coverline", text: long, placement: "left" };
   writeFileSync(join(p.dir, "board", "wide.json"), JSON.stringify(wide));
+  // A plan refusal quoting text with a C1 control (U+0085, which JSON leaves raw): escaped.
+  const control = structuredClone(CHAPTER_BOARD);
+  control.shots[1].type[0] = { line: 0, mode: "coverline", text: long.replace("EVERY-", "EVERY\u0085"), placement: "left" };
+  writeFileSync(join(p.dir, "board", "control.json"), JSON.stringify(control));
   mkdirSync(join(p.dir, "bare-plates"), { recursive: true });
   for (const f of readdirSync(join(p.dir, "plates")).filter((f) => !f.includes(".near.") && !f.includes(".mid.") && !f.includes(".far."))) cpSync(join(p.dir, "plates", f), join(p.dir, "bare-plates", f));
   mkdirSync(join(p.dir, "no-takes"), { recursive: true });
@@ -166,6 +170,7 @@ test("refusals before any work: flags, chapter, range, a missing take, footage o
     [swap(base, "--edl", "edit/badplate.json"), ['--edl: "s001" names plate "../board/shots", which is not a plate key']],
     [swap(base, "--edl", "edit/badtake.json"), ['--edl: "s002" names take "../W01-t2", which is not <clip>-t<n>']],
     [swap(base, "--board", "board/wide.json"), [`--board: "s002" type[0] coverline "${long}" does not fit one line at 56 px (16:9)`]],
+    [swap(base, "--board", "board/control.json"), [`--board: "s002" type[0] coverline "${long.replace("EVERY-", "EVERY\\u0085")}" does not fit one line at 56 px (16:9)`]],
     [swap(base, "--plates", "bare-plates"), ['--plates: "s005" is plate3d and plate "p-roof" has no near, mid and far mattes']],
     [swap(base, "--board", "board/typed.json"), ['--board: "s002" type[1] shows 3 sung words, line 1 has 4 in words.json']],
   ];

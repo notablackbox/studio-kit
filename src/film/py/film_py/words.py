@@ -23,8 +23,8 @@ which the kit's runner never does.)
 3. The gate: with `expect` (a words.json or the test song's truth.json), the share of words
    whose start and end are both within 0.10 s of the expected ones; else the share with `conf`
    of 0.5 or more (GATE, fixed). Under 90 percent fails (exit 3 on the Node side).
-4. The ear check, most urgent first, at most five spots: letters (a line with no letters, or an
-   all-caps token sung letter by letter), order, gap (over 1 s between two words of a line),
+4. The ear check, most urgent first, at most five spots: letters (an all-caps token sung letter
+   by letter; a lyric line with no letters is refused before any work), order, gap (over 1 s between two words of a line),
    verylow (conf under 0.1), length (over 1.2 s, or over three times its line's median),
    lowconf (conf under 0.3, or a time from the fallback).
 5. gaps: 2 s or more between two words, or after the last word to the end of the stem, each
@@ -262,9 +262,7 @@ def fall_back(words, placed, min_conf, signal_env, hop, signal):
 
 def flags_for(sheet_lines, words, timed):
     found = []
-    for n, line in enumerate(sheet_lines):
-        if not line["words"]:
-            found.append({"flag": "letters", "line": n, "t0": None, "message": f"line {n} has no letters"})
+    # A line with no letters never gets here: main refuses it.
     for i, w in enumerate(words):
         if w["acronym"]:
             found.append({"flag": "letters", "i": i, "t0": timed[i]["t0"], "message": f"word {i} {json.dumps(w['token'])} at {timed[i]['t0']:.2f} s is sung letter by letter"})
@@ -290,6 +288,11 @@ def flags_for(sheet_lines, words, timed):
 def main(argv) -> int:
     job = spec(argv)
     sheet_lines, _ = lyrics.parse(read_text(job["lyrics"], "--lyrics"))
+    # A lyric line with no letters is refused, never dropped: it would have no words, and the
+    # display, the board and the chapter engine count lines by the sheet.
+    empty = [n for n, line in enumerate(sheet_lines) if not line["words"]]
+    if empty:
+        refuse([f"lyric line {n} {shown(sheet_lines[n]['text'])} has no letters to align: write it out in words or take it off the sheet" for n in empty])
     words = []
     for n, line in enumerate(sheet_lines):
         for w in line["words"]:

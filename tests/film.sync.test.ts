@@ -22,9 +22,13 @@ before(() => {
   let truth;
   ({ dir, truth } = song());
   truthWords(truth, join(dir, "words.json"));
-  const made = film("window", dir, ["--vocals", "vocals.wav", "--words", "words.json", "--from", "0", "--to", "6", "--name", "W01", "--out", "w"]);
+  // The window from the shot's start, 0.05 s before the first word, for a 5 s clip.
+  const start = Math.round((truth.words[0].start - 0.05) * 10000) / 10000;
+  const made = film("window", dir, ["--vocals", "vocals.wav", "--words", "words.json", "--song-t0", String(start), "--duration", "5", "--from", "0", "--to", "6", "--name", "W01", "--out", "w"]);
   assert.equal(made.status, 0, made.stdout + made.stderr);
-  t0 = JSON.parse(readFileSync(join(dir, "w", "window-report.json"), "utf8")).t0;
+  // --song-t0 is the window's song_t0: the song time of its first sample.
+  t0 = JSON.parse(readFileSync(join(dir, "w", "window-report.json"), "utf8")).song_t0;
+  assert.equal(t0, start);
   window = readWav(join(dir, "w", "W01.wav")).mono;
 });
 
