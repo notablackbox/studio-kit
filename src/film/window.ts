@@ -10,6 +10,7 @@ import {
   isMain,
   outProblem,
   parseFlags,
+  refuseReportPaths,
   requireFile,
   run,
   shown,
@@ -292,6 +293,7 @@ async function main(): Promise<number> {
   const out = fromCaller(values.out);
   const problem = outProblem(out);
   if (problem) throw new Refused([problem]);
+  refuseReportPaths(out, "window", [["--vocals", vocals], ["--words", wordsFile]]);
 
   const temp = mkdtempSync(join(tmpdir(), "studio-kit-window-"));
   try {

@@ -1,7 +1,7 @@
 import { mkdtempSync, openSync, readFileSync, readSync, closeSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { EXIT, Refused, fromCaller, isMain, outProblem, parseFlags, python, requireFile, run, shown, writeIn, writeReport } from "./lib/cli.ts";
+import { EXIT, Refused, fromCaller, isMain, outProblem, parseFlags, python, refuseReportPaths, requireFile, run, shown, writeIn, writeReport } from "./lib/cli.ts";
 
 // film:depth: what the 2.5D moves, the type and the camera need from a plate (claudia.gallery's
 // toolkit wiki, item 12; ruling R3): its depth map from Depth Anything V2 Small, as a 16-bit
@@ -55,6 +55,7 @@ async function main(): Promise<number> {
   const out = fromCaller(values.out);
   const problem = outProblem(out);
   if (problem) throw new Refused([problem]);
+  refuseReportPaths(out, "depth", [["--plate", plate]]);
   const name = basename(plate).replace(/\.png$/i, "");
 
   const work = mkdtempSync(join(tmpdir(), "film-depth-"));

@@ -1,6 +1,6 @@
 import { closeSync, constants, mkdirSync, openSync, readFileSync, realpathSync, writeSync } from "node:fs";
 import { dirname, relative, isAbsolute } from "node:path";
-import { EXIT, Refused, Unexpected, fromCaller, isMain, outProblem, parseFlags, requireFile, run, shown, writeReport } from "./lib/cli.ts";
+import { EXIT, Refused, Unexpected, fromCaller, isMain, outProblem, parseFlags, refuseReportPaths, requireFile, run, shown, writeReport } from "./lib/cli.ts";
 import { type Kind, type Row, idempotencyKey, readLedger, stateOf } from "./lib/ledger.ts";
 
 // film:ledger records what was asked of a provider and what came back (spec D6): one row per
@@ -159,6 +159,12 @@ async function main(): Promise<number> {
   if (action !== "check" && !insideOut(ledgerPath, out)) {
     throw new Refused(["--ledger must be inside --out (the ledger is appended to)"]);
   }
+  refuseReportPaths(out, "ledger", [
+    ["--ledger", ledgerPath],
+    ["--file", values.file !== undefined ? fromCaller(values.file) : null],
+    ["--asked", action === "asked" ? fromCaller(target) : null],
+    ["--meta", values.meta !== undefined ? fromCaller(values.meta) : null],
+  ]);
   const rows = readLedger(ledgerPath);
 
   if (action === "check") {

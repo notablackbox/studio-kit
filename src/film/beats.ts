@@ -1,4 +1,4 @@
-import { EXIT, Failed, Refused, fromCaller, isMain, outProblem, parseFlags, python, requireFile, run, writeIn, writeReport } from "./lib/cli.ts";
+import { EXIT, Failed, Refused, fromCaller, isMain, outProblem, parseFlags, python, refuseReportPaths, requireFile, run, writeIn, writeReport } from "./lib/cli.ts";
 
 // film:beats: the beat map of a take, from its drum stem. Never one BPM: local tempos on 20 s
 // windows every 5 s (0.05 BPM and 4 ms phase steps), beats stepped along the tempo curve and
@@ -56,6 +56,7 @@ async function main(): Promise<number> {
   const words = values.words ? requireFile(fromCaller(values.words), "--words") : null;
   const problem = outProblem(out);
   if (problem) throw new Refused([problem]);
+  refuseReportPaths(out, "beats", [["--drums", drums], ["--lyrics", lyrics], ["--words", words]]);
 
   const spec = { drums, downbeat_phase: phase, tempo_range: range, lyrics, words };
   const mapped = await python<Mapped>("beats", [JSON.stringify(spec)], TIMEOUT_MS);

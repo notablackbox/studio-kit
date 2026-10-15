@@ -1,5 +1,5 @@
 import { statSync } from "node:fs";
-import { EXIT, Refused, fromCaller, isMain, outProblem, parseFlags, python, requireFile, run, writeIn, writeReport } from "./lib/cli.ts";
+import { EXIT, Refused, fromCaller, isMain, outProblem, parseFlags, python, refuseReportPaths, requireFile, run, writeIn, writeReport } from "./lib/cli.ts";
 
 // film:hits: what the track does, where: kick, snare and hat onsets by band on the drum stem,
 // impacts on the mix, drum and bass envelopes, risers, fills (with --beats), the vocal entries
@@ -44,6 +44,7 @@ async function main(): Promise<number> {
   const out = fromCaller(values.out);
   const problem = outProblem(out);
   if (problem) throw new Refused([problem]);
+  refuseReportPaths(out, "hits", [["--mix", mix], ["--beats", beats]]);
 
   const found = await python<Found>("hits", [JSON.stringify({ stems, mix, beats })], TIMEOUT_MS);
   const list = found.hits_json;

@@ -1,6 +1,6 @@
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { EXIT, KIT_ROOT, Refused, Unexpected, fromCaller, isMain, outProblem, parseFlags, requireFile, run, writeIn, writeReport } from "./lib/cli.ts";
+import { EXIT, KIT_ROOT, Refused, Unexpected, fromCaller, isMain, outProblem, parseFlags, refuseReportPaths, requireFile, run, writeIn, writeReport } from "./lib/cli.ts";
 import { readBoard, type Board, type Chapter, type Shot } from "./lib/board.ts";
 
 // film:sheet: the board as something a person can review on a phone (claudia.gallery's
@@ -154,6 +154,7 @@ async function main(): Promise<number> {
   const out = fromCaller(values.out);
   const problem = outProblem(out);
   if (problem) throw new Refused([problem]);
+  refuseReportPaths(out, "sheet", [["--board", boardFile]]);
 
   const chapterOf = (shot: Shot) => board.chapters.find((c) => shot.t0 >= c.t0 - 1e-6 && shot.t0 < c.t1 - 1e-6);
   const found = new Set<string>();

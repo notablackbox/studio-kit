@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { EXIT, Failed, Refused, Unexpected, fromCaller, isMain, outProblem, parseFlags, python, requireFile, run, shown, writeIn, writeReport } from "./lib/cli.ts";
+import { EXIT, Failed, Refused, Unexpected, fromCaller, isMain, outProblem, parseFlags, python, refuseReportPaths, requireFile, run, shown, writeIn, writeReport } from "./lib/cli.ts";
 import type { RunResult } from "../render.ts";
 
 // film:sync: is a delivered take a copy of the clean vocal window it was given, and until when
@@ -85,6 +85,7 @@ async function main(): Promise<number> {
   const out = fromCaller(values.out);
   const problem = outProblem(out);
   if (problem) throw new Refused([problem]);
+  refuseReportPaths(out, "sync", [["--take", take], ["--window", windowFile], ["--beats", beatsFile]]);
   const stem = basename(take).replace(/\.[^.]*$/, "") || "take";
   const png = `${stem}-sync.png`;
 

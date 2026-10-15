@@ -1,7 +1,7 @@
 import { copyFileSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, extname, join, sep } from "node:path";
-import { KIT_ROOT, Refused, fromCaller, outProblem, printable, requireFile, shown } from "./cli.ts";
+import { KIT_ROOT, Refused, fromCaller, outProblem, printable, refuseReportPaths, requireFile, shown } from "./cli.ts";
 import { KEY, readBoard } from "./board.ts";
 import { must, probeVideo } from "./media.ts";
 import { FONT_FILES } from "../../remotion/film/fonts.ts";
@@ -84,7 +84,7 @@ const isFile = (path: string) => {
 };
 
 // Reads and checks a chapter's inputs; throws Refused before any work.
-export function prepareChapter(command: string, values: ChapterValues, options: { required?: string[]; vertical?: boolean } = {}): Prepared {
+export function prepareChapter(command: string, values: ChapterValues, options: { required?: string[]; vertical?: boolean; report?: string } = {}): Prepared {
   const required = options.required ?? [];
   const vertical = options.vertical === true;
   // R-c: cards that switch in one frame exist only to prove the flash check fails.
@@ -208,6 +208,15 @@ export function prepareChapter(command: string, values: ChapterValues, options: 
   const outIssue = outProblem(out);
   if (outIssue) problems.push(outIssue);
   if (problems.length > 0 || !built.plan) throw new Refused(problems);
+  // The command's report (chapter, reframe or history) never lands on one of its inputs.
+  refuseReportPaths(out, options.report ?? "chapter", [
+    ["--board", boardFile],
+    ["--edl", edlFile],
+    ["--words", wordsFile],
+    ["--beats", beatsFile],
+    ["--hits", hitsFile],
+    ["--display", displayFile],
+  ]);
   const plan = built.plan;
 
   // --range t0:t1 in song seconds, inside the chapter.

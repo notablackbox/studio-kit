@@ -1,4 +1,4 @@
-import { EXIT, Failed, Refused, fromCaller, isMain, outProblem, parseFlags, printable, python, requireFile, run, writeIn, writeReport } from "./lib/cli.ts";
+import { EXIT, Failed, Refused, fromCaller, isMain, outProblem, parseFlags, printable, python, refuseReportPaths, requireFile, run, writeIn, writeReport } from "./lib/cli.ts";
 
 // film:words: a time for every sung word. Forced alignment of the lyric sheet on the vocal
 // stem (torchaudio's wav2vec2 MMS_FA), faster-whisper tiny for the words the aligner is unsure
@@ -49,6 +49,7 @@ async function main(): Promise<number> {
   const out = fromCaller(values.out);
   const problem = outProblem(out);
   if (problem) throw new Refused([problem]);
+  refuseReportPaths(out, "words", [["--vocals", vocals], ["--lyrics", lyrics], ["--display", display], ["--expect", expect]]);
 
   const spec = { vocals, lyrics, display, expect, min_conf: minConf };
   const timed = await python<Timed>("words", [JSON.stringify(spec)], TIMEOUT_MS);

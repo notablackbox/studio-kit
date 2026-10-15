@@ -1,7 +1,7 @@
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EXIT, KIT_ROOT, Refused, fromCaller, isMain, outProblem, parseFlags, requireFile, run, shown, writeIn, writeReport } from "./lib/cli.ts";
+import { EXIT, KIT_ROOT, Refused, fromCaller, isMain, outProblem, parseFlags, refuseReportPaths, requireFile, run, shown, writeIn, writeReport } from "./lib/cli.ts";
 import { RENDER_TIMEOUT, moveIn, must, probeVideo } from "./lib/media.ts";
 import { lyricLines, parseTokens, plainText, readPalette } from "../remotion/film/plan.ts";
 
@@ -71,6 +71,7 @@ async function main(): Promise<number> {
   const issue = outProblem(out);
   if (issue) problems.push(issue);
   if (problems.length > 0) throw new Refused(problems);
+  refuseReportPaths(out, "captions", [["--words", wordsFile], ["--display", displayFile], ["--video", video]]);
 
   const cues = display.flatMap((text, n) => {
     const sung = words.filter((w) => w.line === n);

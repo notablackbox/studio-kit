@@ -243,6 +243,50 @@ test("a ledger reached through a linked folder inside --out is refused; nothing 
   assert.equal(rowsOf("proj2/real/ledger.jsonl").length, 1);
 });
 
+test("a ledger that is the report's own path is refused before any write", () => {
+  // A real ledger, named as the report would be: appending then reporting would replace it.
+  const seeded = film("ledger", dir, ["--ledger", "seed3/ledger.jsonl", "--out", "seed3", "--asked", "req/W01.request.json"]);
+  assert.equal(seeded.status, 0, seeded.stdout + seeded.stderr);
+  mkdirSync(join(dir, "proj3"));
+  const ledger = join(dir, "proj3", "ledger-report.json");
+  writeFileSync(ledger, readFileSync(join(dir, "seed3", "ledger.jsonl")));
+  const before = readFileSync(ledger, "utf8");
+  const want = ["--ledger is the report's path (ledger-report.json in --out): the report would overwrite it"];
+  const calls: [string, string[]][] = [
+    ["asked", ["--ledger", "proj3/ledger-report.json", "--out", "proj3", "--asked", "req/M01.request.json"]],
+    ["polled", ["--ledger", "proj3/ledger-report.json", "--out", "proj3", "--polled", key]],
+    ["check", ["--ledger", "proj3/ledger-report.json", "--out", "proj3", "--check", "W01"]],
+    ["spelled through ..", ["--ledger", "proj3/../proj3/ledger-report.json", "--out", join(dir, "proj3"), "--check", "W01"]],
+  ];
+  for (const [what, args] of calls) {
+    const result = film("ledger", dir, args);
+    assert.equal(result.status, 2, `${what}: ${result.stdout}${result.stderr}`);
+    assert.deepEqual(lines(result.stdout), want, what);
+    assert.equal(readFileSync(ledger, "utf8"), before, what);
+  }
+  assert.deepEqual(readdirSync(join(dir, "proj3")), ["ledger-report.json"]);
+  // A delivered file named like the report is refused the same way.
+  const file = film("ledger", dir, ["--ledger", "proj3/l.jsonl", "--out", "proj3", "--delivered", key, "--file", "proj3/ledger-report.json"]);
+  assert.equal(file.status, 2, file.stdout + file.stderr);
+  assert.deepEqual(lines(file.stdout), ["--file is the report's path (ledger-report.json in --out): the report would overwrite it"]);
+  assert.equal(readFileSync(ledger, "utf8"), before);
+  // The same file is fine as the ledger of another --out.
+  const elsewhere = film("ledger", dir, ["--ledger", "proj3/ledger-report.json", "--out", "proj3/reports", "--check", "W01"]);
+  assert.equal(elsewhere.status, 0, elsewhere.stdout + elsewhere.stderr);
+  assert.equal(readFileSync(ledger, "utf8"), before);
+});
+
+test("film:request: a --ledger at the request report's path is refused", () => {
+  mkdirSync(join(dir, "req4"));
+  const ledger = join(dir, "req4", "request-report.json");
+  writeFileSync(ledger, "");
+  const result = film("request", dir, ["--clip", "clips/W01.json", "--provider", "openrouter", "--ledger", "req4/request-report.json", "--out", "req4", "--start-artifact", "a1", "--window-artifact", "a2"]);
+  assert.equal(result.status, 2, result.stdout + result.stderr);
+  assert.deepEqual(lines(result.stdout), ["--ledger is the report's path (request-report.json in --out): the report would overwrite it"]);
+  assert.deepEqual(readdirSync(join(dir, "req4")), ["request-report.json"]);
+  assert.equal(readFileSync(ledger, "utf8"), "");
+});
+
 test("the ledger is never written through a link; anything unexpected is exit 1", () => {
   mkdirSync(join(dir, "linked"));
   writeFileSync(join(dir, "target.jsonl"), readFileSync(join(dir, "proj", "ledger.jsonl")));

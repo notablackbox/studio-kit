@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { accessSync, chmodSync, constants, lstatSync, mkdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import { fileURLToPath } from "node:url";
 import type { RunResult } from "../../render.ts";
@@ -137,6 +137,39 @@ export type Report = { ok: boolean; inputs: Record<string, unknown>; outputs: Re
 // `<name>-report.json` in `out`; `name` is the command without its `film:` prefix.
 export function writeReport(out: string, name: string, report: Report): string {
   return writeIn(out, `${name}-report.json`, JSON.stringify(report, null, 2) + "\n");
+}
+
+// True when `file` is, or would be written as, the report `<name>-report.json` in `out`: the
+// same path as given, the same name in the same folder through the folders' real paths (the
+// report is renamed into its folder by name), or a link that resolves to the report.
+export function isReportPath(file: string, out: string, name: string): boolean {
+  const report = `${name}-report.json`;
+  if (resolve(file) === resolve(out, report)) return true;
+  let realOut: string;
+  try {
+    realOut = realpathSync(out);
+  } catch {
+    return false; // an --out not made yet holds no file
+  }
+  try {
+    if (basename(file) === report && join(realpathSync(dirname(file)), report) === join(realOut, report)) return true;
+  } catch {
+    // the file's folder is not there: it is not in --out
+  }
+  try {
+    return realpathSync(file) === join(realOut, report);
+  } catch {
+    return false;
+  }
+}
+
+// Refused (exit 2) before any work when an input file is the report's own path: the report
+// would overwrite it. `inputs` pairs each flag with the path it names (null when not given).
+export function refuseReportPaths(out: string, name: string, inputs: [string, string | null | undefined][]): void {
+  const lines = inputs
+    .filter(([, path]) => typeof path === "string" && isReportPath(path, out, name))
+    .map(([flag]) => `${flag} is the report's path (${name}-report.json in --out): the report would overwrite it`);
+  if (lines.length > 0) throw new Refused([...new Set(lines)]);
 }
 
 // The models folder the image build filled (`FILM_MODELS`, else /opt/models).

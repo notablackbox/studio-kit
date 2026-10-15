@@ -319,6 +319,9 @@ The contract, the same for every film command:
   file it names), the system temp folder and `node_modules`. A value from the
   input in a printed line is JSON-quoted, as walk and render print them, so one
   problem is always one line. Nothing spends money or holds a key.
+- An input file (a ledger, a words.json, a video, any path flag naming a file)
+  that is the command's own report path, `<name>-report.json` in `--out`, is
+  refused, exit 2, before anything is written: the report would replace it.
 
 The audio and vision work is Python, run as `python3 -I -m film_py.<module>`
 with the kit's `src/film/py` put first on the path (`-I` drops the current
@@ -835,6 +838,10 @@ Inside means on disk, not only by the path's spelling: the ledger's folder (or,
 when it is not made yet, the deepest part of it that is) is resolved through any
 link and must land inside `--out`'s real path, so `<out>/logs` linked to a folder
 elsewhere is refused; the parts still to be made are made as plain folders.
+The ledger cannot be the report: a `--ledger` that resolves to
+`ledger-report.json` in `--out` is refused for every action, `--check`
+included, before the row is appended (the report would replace the ledger);
+so are `--file`, `--asked` and `--meta` at that path.
 It never rewrites a row and never writes through a link. A row after `asked`
 names the key of an `asked` row and carries its reference, attempt, provider
 and estimate. `--figures` is the provider's figures as returned, a JSON object
@@ -1262,6 +1269,12 @@ for what the input held; a value from the input is printed JSON-quoted.
 - `changelog: cannot read the --in file`
 - `changelog: the first line holds no date`
 
+Every film command that reads an input file refuses one that is its own report
+(`<name>-report.json` in `--out`, by its spelling, through a linked folder, or
+through a link to the report), since the report would replace it:
+`--words is the report's path (gate-report.json in --out): the report would overwrite it`,
+one line per such flag. The lists below do not repeat it.
+
 `film:status` (one line, naming the first problem):
 
 - `film:status: --status <path> is required`
@@ -1412,7 +1425,9 @@ and `model depth is not in "/opt/models" (run ...)`.
   `film:ledger: give one of --asked, --polled, --delivered, --declined, --failed or --check`
 - `--delivered needs --file <path>`, `--file goes with --delivered only`, `--file cannot be read`,
   `--figures and --reason go with the rows after asked`, `--figures is not a JSON object`
-- `--ledger must be inside --out (the ledger is appended to)`, `--ledger line 3 is not a ledger row`
+- `--ledger must be inside --out (the ledger is appended to)`, `--ledger line 3 is not a ledger row`,
+  `--ledger is the report's path (ledger-report.json in --out): the report would overwrite it`
+  (and `--file`, `--asked`, `--meta`)
 - `--asked is not a request file`, `--meta cannot be read`, `--meta is not a request meta file`,
   `--meta goes with --asked only`,
   `--asked: the idempotency_key is not the key of the body, provider, model and attempt 2`,

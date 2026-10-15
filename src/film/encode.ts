@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { EXIT, Refused, Unexpected, fromCaller, isMain, outProblem, parseFlags, requireFile, run, shown, writeIn, writeReport } from "./lib/cli.ts";
+import { EXIT, Refused, Unexpected, fromCaller, isMain, outProblem, parseFlags, refuseReportPaths, requireFile, run, shown, writeIn, writeReport } from "./lib/cli.ts";
 import { RENDER_TIMEOUT, audioSeconds, moveIn, must, probeVideo, type VideoProbe } from "./lib/media.ts";
 
 // film:encode: the deliverables (motion wiki, "Encode"; toolkit item 25). The chapter videos,
@@ -97,6 +97,7 @@ async function main(): Promise<number> {
   const issue = outProblem(out);
   if (issue) problems.push(issue);
   if (problems.length > 0) throw new Refused(problems);
+  refuseReportPaths(out, "encode", [...chapters.map((f): [string, string] => ["--chapters", f]), ["--mix", mix]]);
 
   const total = probes.reduce((s, p) => s + p.duration, 0);
   const size = { width: probes[0].width, height: probes[0].height };

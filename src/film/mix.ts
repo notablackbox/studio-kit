@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EXIT, Failed, Refused, Unexpected, fromCaller, isMain, outProblem, parseFlags, requireFile, run, shown, writeIn, writeReport } from "./lib/cli.ts";
+import { EXIT, Failed, Refused, Unexpected, fromCaller, isMain, outProblem, parseFlags, refuseReportPaths, requireFile, run, shown, writeIn, writeReport } from "./lib/cli.ts";
 import { audioSeconds, must, tool } from "./lib/media.ts";
 import { SOUNDS, type SoundKind } from "../remotion/film/plan.ts";
 
@@ -102,6 +102,7 @@ async function main(): Promise<number> {
   const issue = outProblem(out);
   if (issue) problems.push(issue);
   if (problems.length > 0) throw new Refused(problems);
+  refuseReportPaths(out, "mix", [["--master", master], ["--vocals", vocals], ...eventFiles.map((f): [string, string] => ["--events", f])]);
   const inputsUsed = { master, vocals, sounds: soundsDir, events: eventFiles };
 
   const temp = mkdtempSync(join(tmpdir(), "studio-kit-mix-"));

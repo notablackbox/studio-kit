@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { EXIT, Failed, Refused, fromCaller, isMain, outProblem, parseFlags, requireFile, run, shown, writeReport } from "./lib/cli.ts";
+import { EXIT, Failed, Refused, fromCaller, isMain, outProblem, parseFlags, refuseReportPaths, requireFile, run, shown, writeReport } from "./lib/cli.ts";
 import { FILM_FPS, lyricLines, parseTokens } from "../remotion/film/plan.ts";
 
 // film:gate: the lyric gate (toolkit item 19; R1). Every sung word in the span the tokens
@@ -55,6 +55,7 @@ async function main(): Promise<number> {
   const issue = outProblem(out);
   if (issue) problems.push(issue);
   if (problems.length > 0) throw new Refused(problems);
+  refuseReportPaths(out, "gate", [["--tokens", tokensFile], ["--words", wordsFile], ["--display", displayFile]]);
 
   // Frames on the song clock: frame F shows song time F / 24.
   const frames = new Map<number, Set<number>>();

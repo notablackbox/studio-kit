@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
-import { EXIT, Refused, fromCaller, isMain, outProblem, parseFlags, requireFile, run, shown, writeIn, writeReport } from "./lib/cli.ts";
+import { EXIT, Refused, fromCaller, isMain, outProblem, parseFlags, refuseReportPaths, requireFile, run, shown, writeIn, writeReport } from "./lib/cli.ts";
 import { idempotencyKey, readLedger, stateOf } from "./lib/ledger.ts";
 
 // film:request shapes one paid call and makes none (spec D6 and 8.2). <id>.request.json is
@@ -242,6 +242,7 @@ async function main(): Promise<number> {
   const out = fromCaller(values.out);
   const problem = outProblem(out);
   if (problem) throw new Refused([problem]);
+  refuseReportPaths(out, "request", [[isClip ? "--clip" : "--image", specPath], ["--ledger", ledgerPath]]);
 
   // The body, in the provider's own shape. Output settings are fields here, never prompt words.
   const placeholder = (artifact: string) => `{{artifact:${artifact}}}`;

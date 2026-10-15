@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
-import { EXIT, Failed, Refused, fromCaller, isMain, outProblem, parseFlags, requireFile, run, shown, writeReport } from "./lib/cli.ts";
+import { EXIT, Failed, Refused, fromCaller, isMain, outProblem, parseFlags, refuseReportPaths, requireFile, run, shown, writeReport } from "./lib/cli.ts";
 import { lyricLines, readBoard, type Board, type Shot } from "./lib/board.ts";
 import { frameAt } from "../remotion/film/plan.ts";
 
@@ -640,6 +640,7 @@ async function main(): Promise<number> {
   const out = fromCaller(values.out);
   const problem = outProblem(out);
   if (problem) throw new Refused([problem]);
+  refuseReportPaths(out, "audit", [["--board", paths.board], ["--beats", paths.beats], ["--words", paths.words], ["--hits", paths.hits], ["--display", paths.display], ["--walk-report", walkReport]]);
 
   const result = auditBoard(board, analysis, { leadShare, motionSeconds, motionClips, taboo, hooks, deferProvenance: defer.includes("provenance"), provenance });
   const failing = result.gates.filter((g) => g.status === "fail");

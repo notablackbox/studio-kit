@@ -1,5 +1,5 @@
 import { statSync } from "node:fs";
-import { EXIT, Refused, fromCaller, isMain, outProblem, parseFlags, python, run, writeReport } from "./lib/cli.ts";
+import { EXIT, Refused, fromCaller, isMain, outProblem, parseFlags, python, refuseReportPaths, run, writeReport } from "./lib/cli.ts";
 
 // film:score: scores a lyric sheet before any take is spent. Per line: syllables and stresses
 // from the CMU dictionary (a letter-group fallback for words it lacks), a scansion score; per
@@ -31,6 +31,7 @@ async function main(): Promise<number> {
   if (size > MAX_BYTES) throw new Refused(["lyrics file is over 64 KB"]);
   const problem = outProblem(out);
   if (problem) throw new Refused([problem]);
+  refuseReportPaths(out, "score", [["--lyrics", lyrics]]);
 
   // The Python side reads the sheet and refuses one with no lyric line; it writes nothing.
   const scored = await python<Scored>("score", [lyrics], TIMEOUT_MS);

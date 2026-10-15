@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EXIT, Refused, fromCaller, isMain, outProblem, parseFlags, python, requireFile, run, writeIn, writeReport } from "./lib/cli.ts";
+import { EXIT, Refused, fromCaller, isMain, outProblem, parseFlags, python, refuseReportPaths, requireFile, run, writeIn, writeReport } from "./lib/cli.ts";
 
 // film:stems: splits the master into vocals, drums, bass and other with demucs htdemucs on the
 // CPU (four stems, never two). The stems land in <out>/stems/ as 16-bit WAVs; the report gives
@@ -56,6 +56,7 @@ async function main(): Promise<number> {
   const out = fromCaller(values.out);
   const problem = outProblem(out);
   if (problem) throw new Refused([problem]);
+  refuseReportPaths(out, "stems", [["--in", input]]);
 
   const started = Date.now();
   // demucs writes into a temp folder; the four stems then go into --out as one unit: written

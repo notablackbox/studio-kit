@@ -17,7 +17,7 @@ import { audioEvents, tokensSidecar } from "../remotion/film/plan.ts";
 const COMMAND = "film:chapter";
 
 export async function renderChapter(command: string, report: string, values: ChapterValues, vertical: boolean): Promise<number> {
-  const prepared = prepareChapter(command, values, { vertical });
+  const prepared = prepareChapter(command, values, { vertical, report });
   const { out, chapter } = prepared;
   const suffix = vertical ? ".9x16" : "";
   const names = { video: `${chapter}${suffix}.mp4`, tokens: `${chapter}${suffix}.tokens.json`, audio: `${chapter}${suffix}.audio.json` };

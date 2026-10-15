@@ -1,6 +1,6 @@
 import { before, test } from "node:test";
 import assert from "node:assert/strict";
-import { cpSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { film, lines, tempDir } from "./fixtures/film.ts";
 import { boardFixture } from "./fixtures/board.ts";
@@ -81,4 +81,17 @@ test("refusals: missing flags, a file that is not a sidecar, a display that does
     assert.deepEqual(lines(result.stdout), want);
   }
   assert.equal(existsSync(join(dir, "x")), false);
+});
+
+test("an input at the report's own path is refused before the report replaces it", () => {
+  // words.json copied to <out>/gate-report.json and read from there: the report would replace it.
+  mkdirSync(join(dir, "same"));
+  cpSync(join(dir, "words.json"), join(dir, "same", "gate-report.json"));
+  sidecar("same-all.json", 0, 287);
+  const before = readFileSync(join(dir, "same", "gate-report.json"), "utf8");
+  const result = film("gate", dir, ["--tokens", "same-all.json", "--words", "same/gate-report.json", "--display", "display.txt", "--out", "same"]);
+  assert.equal(result.status, 2, result.stdout + result.stderr);
+  assert.deepEqual(lines(result.stdout), ["--words is the report's path (gate-report.json in --out): the report would overwrite it"]);
+  assert.equal(readFileSync(join(dir, "same", "gate-report.json"), "utf8"), before);
+  assert.deepEqual(readdirSync(join(dir, "same")), ["gate-report.json"]);
 });

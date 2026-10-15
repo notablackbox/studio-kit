@@ -53,7 +53,7 @@ async function main(): Promise<number> {
   const { values } = parseFlags(COMMAND, { ...CHAPTER_FLAGS, frames: { type: "string" }, "test-leak": { type: "boolean" } });
   if (values["test-leak"] && process.env.FILM_TEST !== "1") throw new Refused(["--test-leak is for the kit's tests only (FILM_TEST=1)"]);
   if (values.range !== undefined) throw new Refused([`${COMMAND}: --range is not used here; name the two frames with --frames A,B`]);
-  const prepared = prepareChapter(COMMAND, values as ChapterValues, { required: ["frames"] });
+  const prepared = prepareChapter(COMMAND, values as ChapterValues, { required: ["frames"], report: "history" });
   const m = /^(\d+),(\d+)$/.exec(values.frames ?? "");
   const total = prepared.plan.to - prepared.plan.from;
   if (!m) throw new Refused([`--frames is ${shown(values.frames)}, want A,B (two frames of the chapter)`]);

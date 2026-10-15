@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EXIT, Failed, Refused, fromCaller, isMain, outProblem, parseFlags, python, requireFile, run, writeReport } from "./lib/cli.ts";
+import { EXIT, Failed, Refused, fromCaller, isMain, outProblem, parseFlags, python, refuseReportPaths, requireFile, run, writeReport } from "./lib/cli.ts";
 import { must, probeVideo } from "./lib/media.ts";
 
 // film:flash: the WCAG 2.3.1 flash check (toolkit item 21). ffmpeg decodes the video at 96x54
@@ -42,6 +42,7 @@ async function main(): Promise<number> {
   const out = fromCaller(values.out);
   const issue = outProblem(out);
   if (issue) throw new Refused([issue]);
+  refuseReportPaths(out, "flash", [["--video", video]]);
   const probe = await probeVideo(video);
   if (!probe) throw new Refused(["--video cannot be read as a video"]);
 

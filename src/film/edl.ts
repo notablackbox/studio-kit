@@ -1,6 +1,6 @@
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { EXIT, Failed, Refused, fromCaller, isMain, outProblem, parseFlags, requireFile, run, shown, writeIn, writeReport } from "./lib/cli.ts";
+import { EXIT, Failed, Refused, fromCaller, isMain, outProblem, parseFlags, refuseReportPaths, requireFile, run, shown, writeIn, writeReport } from "./lib/cli.ts";
 import { KEY, readBoard, type Shot } from "./lib/board.ts";
 
 // film:edl: the edit list (claudia.gallery's toolkit wiki, item 17; edl.json in wiki/formats).
@@ -227,6 +227,7 @@ async function main(): Promise<number> {
   const out = fromCaller(values.out);
   const problem = outProblem(out);
   if (problem) throw new Refused([problem]);
+  refuseReportPaths(out, "edl", [["--board", boardFile], ["--words", wordsFile]]);
 
   const edl: Record<string, Entry> = {};
   const fallbacks: Fallback[] = [];
