@@ -263,6 +263,25 @@ test("flag refusals: one line each, exit 2, nothing written", () => {
   assert.deepEqual(lines(named.stdout), ['--clip: "W09.json" holds clip "W01"']);
 });
 
+test("a --ledger at the request's own output paths is refused before any write", () => {
+  const arts = ["--start-artifact", "a1", "--window-artifact", "a2"];
+  mkdirSync(join(dir, "lq"), { recursive: true });
+  for (const named of ["W01.request.json", "W01.request.meta.json"]) {
+    // An empty ledger (no rows yet) sitting where the request would write.
+    writeFileSync(join(dir, "lq", named), "");
+    const result = film("request", dir, ["--clip", "clips/W01.json", "--ledger", `lq/${named}`, "--out", "lq", "--provider", "openrouter", ...arts]);
+    assert.equal(result.status, 2, result.stdout + result.stderr);
+    assert.deepEqual(lines(result.stdout), [`--ledger is ${JSON.stringify(named)} in --out: the request would overwrite it`]);
+    assert.equal(readFileSync(join(dir, "lq", named), "utf8"), "");
+  }
+  assert.deepEqual(readdirSync(join(dir, "lq")).sort(), ["W01.request.json", "W01.request.meta.json"]);
+  // A ledger not made yet, at that path in an --out not made yet, is refused the same way.
+  const fresh = film("request", dir, ["--clip", "clips/W01.json", "--ledger", "lq2/W01.request.meta.json", "--out", "lq2", "--provider", "openrouter", ...arts]);
+  assert.equal(fresh.status, 2, fresh.stdout + fresh.stderr);
+  assert.deepEqual(lines(fresh.stdout), ['--ledger is "W01.request.meta.json" in --out: the request would overwrite it']);
+  assert.equal(existsSync(join(dir, "lq2")), false);
+});
+
 test("a sung prompt over about 90 words is a warning, not a refusal", () => {
   const words = Array.from({ length: 23 }, (_, i) => `w${i}`).join(" ");
   const clip = variant("X20", (c) => (c.body.prompt = `close-up ${words}`));

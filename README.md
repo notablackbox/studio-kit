@@ -1470,6 +1470,9 @@ and `model depth is not in "/opt/models" (run ...)`.
   string or `null` is refused, never read as no refs)
 - `"W01" was declined on openrouter: no request for it on any provider`
 - `--ledger line 3 is not a ledger row`
+- `--ledger is "W01.request.json" in --out: the request would overwrite it` (or
+  `"W01.request.meta.json"`, or `--clip`/`--image`): an input at either file the request
+  writes in `--out`, by the same tests as the report's path, is refused before any write
 
 `film:ledger`:
 

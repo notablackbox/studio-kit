@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
-import { EXIT, Refused, fromCaller, isMain, outProblem, parseFlags, refuseReportPaths, requireFile, run, shown, writeIn, writeReport } from "./lib/cli.ts";
+import { EXIT, Refused, fromCaller, isMain, isOutPath, outProblem, parseFlags, refuseReportPaths, requireFile, run, shown, writeIn, writeReport } from "./lib/cli.ts";
 import { idempotencyKey, readLedger, stateOf } from "./lib/ledger.ts";
 
 // film:request shapes one paid call and makes none (spec D6 and 8.2). <id>.request.json is
@@ -253,6 +253,13 @@ async function main(): Promise<number> {
   const problem = outProblem(out);
   if (problem) throw new Refused([problem]);
   refuseReportPaths(out, "request", [[isClip ? "--clip" : "--image", specPath], ["--ledger", ledgerPath]]);
+  // Nor may an input be one of the two files the request writes in --out by its reference.
+  const overwritten = ([[isClip ? "--clip" : "--image", specPath], ["--ledger", ledgerPath]] as [string, string][]).flatMap(([flag, path]) =>
+    [`${id}.request.json`, `${id}.request.meta.json`]
+      .filter((named) => isOutPath(path, out, named))
+      .map((named) => `${flag} is ${shown(named)} in --out: the request would overwrite it`),
+  );
+  if (overwritten.length > 0) throw new Refused(overwritten);
 
   // The body, in the provider's own shape. Output settings are fields here, never prompt words.
   const placeholder = (artifact: string) => `{{artifact:${artifact}}}`;

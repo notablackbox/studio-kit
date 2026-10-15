@@ -143,7 +143,12 @@ export function writeReport(out: string, name: string, report: Report): string {
 // same path as given, the same name in the same folder through the folders' real paths (the
 // report is renamed into its folder by name), or a link that resolves to the report.
 export function isReportPath(file: string, out: string, name: string): boolean {
-  const report = `${name}-report.json`;
+  return isOutPath(file, out, `${name}-report.json`);
+}
+
+// True when `file` is, or would be written as, the file named `report` in `out` (any output a
+// command writes there by name with writeIn), by the same three tests as isReportPath.
+export function isOutPath(file: string, out: string, report: string): boolean {
   if (resolve(file) === resolve(out, report)) return true;
   let realOut: string;
   try {
