@@ -12,13 +12,21 @@ raw file holds the video decoded by ffmpeg at 96x54 and 24 fps as rgb24 frames.
   field of view). Here the area is a quarter of the frame, and the change is measured per pixel,
   not on the frame's mean: a quarter of the frame flashing moves the mean by only a quarter as
   much.
-- The candidate stretches are the runs of frames whose mean moves one way (each step 0.002 or
-  more; a smaller step ends the run), however little the mean moves in all. A run is a transition
-  when, between its first and last frame, at least a quarter of the frame's pixels changed by 0.1
-  or more in the run's direction with the darker of their two values under 0.8.
-- What this does not see: two regions changing the opposite ways at once, so that the mean
-  stays within 0.002 a frame (each region's change is still caught when the mean moves with it).
-- A flash is a pair of opposing transitions, counted at the second one; pairs, not transitions.
+- Candidates are found per pixel and per direction, so regions moving opposite ways are each
+  seen whatever the frame's mean does. For each pair of consecutive frames, a pixel steps up when
+  its luminance rises by 0.005 or more, down when it falls by 0.005 or more. An up run is a
+  stretch of consecutive frame steps in each of which at least a quarter of the frame's pixels
+  step up; down runs likewise. Up runs and down runs are tracked independently, so two halves
+  moving opposite ways give an up run and a down run over the same frames.
+- A run is a transition when, between its first and last frame, at least a quarter of the frame's
+  pixels changed by 0.1 or more in the run's direction with the darker of their two values under
+  0.8; those pixels are the transition's area.
+- What this does not see: a change spread out so that under a quarter of the frame steps the same
+  way in any one frame (a slow wipe), or one whose pixels move by under 0.005 a frame.
+- A flash is a pair of opposing transitions over the same place: a transition pairs with the most
+  recent earlier transition whose area overlaps its own by a quarter of the frame or more, when
+  that one went the other way and is in no pair yet. It is counted at the second one; pairs, not
+  transitions. Two halves flashing in opposite directions are two flashes per cycle, one each.
 - Any one-second window (24 frames) holding more than three flashes fails.
 - The red flash, which WCAG defines apart from the general one: a pixel is saturated red when
   R / (R + G + B) >= 0.8 (the 8-bit sRGB values; black is not red). Each frame's red fraction is
@@ -47,6 +55,7 @@ DARK = 0.8
 AREA = 0.25
 POP = 0.03
 FLAT = 0.002
+NUDGE = 0.005
 MAX_FLASHES = 3
 RED = 0.8
 
@@ -83,23 +92,57 @@ def runs(series):
         k = end + 1
 
 
+def pixel_runs(lum, direction):
+    """Runs of frame steps in which a quarter of the pixels step `direction`'s way by NUDGE or more."""
+    steps = (np.diff(lum, axis=0) * direction) >= NUDGE
+    moving = steps.reshape(len(steps), -1).mean(axis=1) >= AREA
+    k = 0
+    while k < len(moving):
+        if not moving[k]:
+            k += 1
+            continue
+        end = k
+        while end + 1 < len(moving) and moving[end + 1]:
+            end += 1
+        yield k, end + 1
+        k = end + 1
+
+
 def transitions(lum, means):
-    """Monotonic runs of the mean, kept when a quarter of the pixels pass WCAG's thresholds.
+    """Per-direction pixel runs, kept when a quarter of the pixels pass WCAG's thresholds.
 
     Per pixel, between the run's first and last frame: a change of 0.1 or more in the run's
     direction, the darker of the two values under 0.8. `change` is the mean's (for the report);
-    `area` the share of pixels that qualified.
+    `area` the share of pixels that qualified. The masks (the qualifying pixels) go beside the
+    list for the pairing.
     """
     found = []
-    for start, end, direction in runs(means):
-        first, last = lum[start], lum[end]
-        moved = (last - first) * direction
-        qualifies = (moved >= STEP) & (np.minimum(first, last) < DARK)
-        area = float(np.mean(qualifies))
-        if area >= AREA:
-            change = means[end] - means[start]
-            found.append({"from": int(start), "to": int(end), "dir": direction, "change": round(float(change), 4), "area": round(area, 3)})
-    return found
+    for direction in (1, -1):
+        for start, end in pixel_runs(lum, direction):
+            first, last = lum[start], lum[end]
+            qualifies = ((last - first) * direction >= STEP) & (np.minimum(first, last) < DARK)
+            area = float(np.mean(qualifies))
+            if area >= AREA:
+                change = means[end] - means[start]
+                found.append(({"from": int(start), "to": int(end), "dir": direction, "change": round(float(change), 4), "area": round(area, 3)}, qualifies))
+    found.sort(key=lambda f: (f[0]["to"], f[0]["from"], f[0]["dir"]))
+    return [f[0] for f in found], [f[1] for f in found]
+
+
+def paired(found, masks, fps):
+    """Flashes: a transition pairs with the latest earlier one over the same place (areas
+    overlapping by a quarter of the frame) when that one went the other way and is unpaired."""
+    flashes = []
+    used = set()
+    for i in range(len(found)):
+        for j in range(i - 1, -1, -1):
+            if found[j]["to"] > found[i]["from"] or float(np.mean(masks[j] & masks[i])) < AREA:
+                continue
+            if found[j]["dir"] != found[i]["dir"] and j not in used:
+                used.update((i, j))
+                flashes.append({"frame": found[i]["to"], "t": round(found[i]["to"] / fps, 4)})
+            break
+    return flashes
 
 
 def red_transitions(red):
@@ -156,8 +199,8 @@ def main():
     means = lum.reshape(len(lum), -1).mean(axis=1)
     red = saturated_red(frames).reshape(len(frames), -1).mean(axis=1)
 
-    found = transitions(lum, means)
-    flashes = pairs(found, fps)
+    found, masks = transitions(lum, means)
+    flashes = paired(found, masks, fps)
     worst, merged = windowed(flashes, len(means), fps)
     red_found = red_transitions(red)
     red_flashes = pairs(red_found, fps)

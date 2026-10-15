@@ -130,6 +130,35 @@ test("a quarter of the frame flashing fails though the whole frame's mean barely
   assert.deepEqual(lines(faint.stdout), ["flash: clean, 48 frames, at most 0 flashes and 0 red flashes in any second, no pops"]);
 });
 
+// The left half and the right half alternate in opposite directions every 2 frames (6 Hz)
+// between gray 124 (linear 0.2016) and gray 160 (linear 0.3515): a change of 0.15 per half,
+// while the frame's mean stays where it is.
+function opposed(name: string, seconds = 2): string {
+  const v = `if(eq(lt(X,96),lt(mod(N,4),2)),160,124)`;
+  const result = spawnSync("ffmpeg", [
+    "-y", "-loglevel", "error", "-f", "lavfi", "-i", `color=c=black:s=192x108:r=24:d=${seconds}`,
+    "-vf", `format=rgb24,geq=r='${v}':g='${v}':b='${v}'`,
+    "-c:v", "libx264rgb", "-preset", "ultrafast", "-qp", "0", join(dir, name),
+  ], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  return name;
+}
+
+test("two halves flashing in opposite directions fail though the mean stands still", () => {
+  const result = film("flash", dir, ["--video", opposed("opposed.mp4"), "--out", "opposed"]);
+  assert.equal(result.status, 3, result.stdout + result.stderr);
+  const out = lines(result.stdout);
+  assert.equal(out.length, 1);
+  assert.match(out[0], /^flash: \d+ flashes in one second between \d\.\d{3} and \d\.\d{3} s, want at most 3$/);
+  const r = report("opposed");
+  assert.equal(r.ok, false);
+  assert.ok(Math.max(...r.mean_luminance) - Math.min(...r.mean_luminance) < 0.002);
+  // Each half flashes six times a second: twelve pairs, each of one half's own opposing changes.
+  assert.equal(r.worst_second.count, 12);
+  assert.ok(r.transitions.some((t: { dir: number }) => t.dir === 1));
+  assert.ok(r.transitions.some((t: { dir: number }) => t.dir === -1));
+});
+
 test("refusals: missing flags, a file that is not a video", () => {
   const cases: [string[], string[]][] = [
     [["--video", "steady.mp4"], ["film:flash: --video and --out are required"]],

@@ -1046,15 +1046,23 @@ otherwise it prints `HISTORY-INDEPENDENT`. It keeps both PNGs in `--out`.
 remembers the frames a page has drawn, so the tests can show the check fails.
 
 `film:flash` (toolkit item 21) decodes the video at 96x54 and 24 fps and asks
-`film_py.flash`: linear relative luminance per pixel; the candidate stretches
-are the runs of the frame's mean one way (each step 0.002 or more, however
-little in all), and a run is a transition when a quarter of the frame's pixels
-changed by 0.1 or more its way between its ends, the darker value under 0.8
-(measured per pixel, so a quarter of the frame flashing is caught though the
-mean moves a quarter as much; two regions changing opposite ways at once, the
-mean standing still, are not seen); a flash is a pair of opposing transitions
-(pairs, not transitions); more than three in any one-second window fails (exit
-3, one line per failing stretch). The red flash is WCAG's separate rule and is
+`film_py.flash`: linear relative luminance per pixel. Candidates are found per
+pixel and per direction, never from the frame's mean: an up run is a stretch of
+frame steps in each of which at least a quarter of the pixels rise by 0.005 or
+more, a down run likewise for falls, and the two are tracked independently. A
+run is a transition when a quarter of the frame's pixels changed by 0.1 or more
+its way between its ends, the darker value under 0.8, and those pixels are its
+area. So a quarter of the frame flashing is caught though the mean moves a
+quarter as much, and two halves flashing in opposite directions, the mean
+standing still, give an up run and a down run at the same frames and are caught
+too. Not seen: a change spread so that under a quarter of the frame steps the
+same way in any one frame (a slow wipe), or one moving under 0.005 a frame. A
+flash is a pair of opposing transitions over the same place: a transition pairs
+with the latest earlier one whose area overlaps its own by a quarter of the
+frame, when that one went the other way and is in no pair yet (pairs, not
+transitions; two halves flashing opposite ways at 6 Hz are twelve flashes a
+second, six each). More than three in any one-second window fails (exit 3, one
+line per failing stretch). The red flash is WCAG's separate rule and is
 counted beside it: a pixel is saturated red when R / (R + G + B) >= 0.8 (the
 8-bit values); a red transition is a run of the frame's saturated-red share one
 way by a quarter of the frame or more; red flashes are pairs of opposing red
