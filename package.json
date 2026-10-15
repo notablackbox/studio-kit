@@ -20,6 +20,9 @@
     "film:sheet": "tsx src/film/sheet.ts",
     "film:depth": "tsx src/film/depth.ts",
     "film:edl": "tsx src/film/edl.ts",
+    "film:request": "tsx src/film/request.ts",
+    "film:ledger": "tsx src/film/ledger.ts",
+    "film:sync": "tsx src/film/sync.ts",
     "test": "node --import tsx --test tests/*.test.ts"
   },
   "dependencies": {
