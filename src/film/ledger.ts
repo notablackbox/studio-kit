@@ -1,4 +1,4 @@
-import { closeSync, constants, mkdirSync, openSync, readFileSync, writeSync } from "node:fs";
+import { closeSync, constants, mkdirSync, openSync, readFileSync, realpathSync, writeSync } from "node:fs";
 import { dirname, relative, isAbsolute } from "node:path";
 import { EXIT, Refused, Unexpected, fromCaller, isMain, outProblem, parseFlags, requireFile, run, shown, writeReport } from "./lib/cli.ts";
 import { type Kind, type Row, idempotencyKey, readLedger, stateOf } from "./lib/ledger.ts";
@@ -14,7 +14,7 @@ import { type Kind, type Row, idempotencyKey, readLedger, stateOf } from "./lib/
 // and so does this command for any row but the decline's own (a delivered key cannot be
 // declined either).
 // `--check <reference>` prints the reference's state. The ledger must sit inside --out, the
-// one folder the command writes in.
+// one folder the command writes in, on disk: its folder is resolved through any link.
 
 const COMMAND = "film:ledger";
 const ACTIONS = ["asked", "polled", "delivered", "declined", "failed", "check"] as const;
@@ -74,6 +74,36 @@ function append(path: string, line: string): void {
   }
 }
 
+const within = (folder: string, path: string) => {
+  const rel = relative(folder, path);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+};
+
+// Whether the ledger lands inside --out on disk, not only by its spelling: the ledger's folder
+// (or, when that is not made yet, the deepest part of it that is) must resolve, through any
+// link, inside --out's real path. The parts still to be made are made as plain folders. An
+// --out not made yet holds no link, so its spelling is enough.
+function insideOut(ledgerPath: string, out: string): boolean {
+  const rel = relative(out, ledgerPath);
+  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return false;
+  let realOut: string;
+  try {
+    realOut = realpathSync(out);
+  } catch {
+    return true;
+  }
+  let at = dirname(ledgerPath);
+  for (;;) {
+    try {
+      return within(realOut, realpathSync(at));
+    } catch {
+      // Not there yet: its parent decides, up to --out itself, which is there.
+      if (at === out) return false;
+      at = dirname(at);
+    }
+  }
+}
+
 async function main(): Promise<number> {
   const { values } = parseFlags(COMMAND, {
     ledger: { type: "string" },
@@ -117,8 +147,7 @@ async function main(): Promise<number> {
   const problem = outProblem(out);
   if (problem) throw new Refused([problem]);
   const ledgerPath = fromCaller(values.ledger);
-  const inside = relative(out, ledgerPath);
-  if (action !== "check" && (inside === "" || inside.startsWith("..") || isAbsolute(inside))) {
+  if (action !== "check" && !insideOut(ledgerPath, out)) {
     throw new Refused(["--ledger must be inside --out (the ledger is appended to)"]);
   }
   const rows = readLedger(ledgerPath);

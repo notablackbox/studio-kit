@@ -829,6 +829,10 @@ provider, attempt, length, estimate and the key's first twelve digits:
 
 It appends one row to the ledger, which must sit inside `--out`:
 `{ts, kind, key, reference, attempt, provider, estimate, figures, file, reason}`.
+Inside means on disk, not only by the path's spelling: the ledger's folder (or,
+when it is not made yet, the deepest part of it that is) is resolved through any
+link and must land inside `--out`'s real path, so `<out>/logs` linked to a folder
+elsewhere is refused; the parts still to be made are made as plain folders.
 It never rewrites a row and never writes through a link. A row after `asked`
 names the key of an `asked` row and carries its reference, attempt, provider
 and estimate. `--figures` is the provider's figures as returned, a JSON object

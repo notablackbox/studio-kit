@@ -1,6 +1,6 @@
 import { before, test } from "node:test";
 import assert from "node:assert/strict";
-import { cpSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { film, kitRoot, lines } from "./fixtures/film.ts";
 import { boardDir } from "./fixtures/board.ts";
@@ -189,6 +189,26 @@ test("refusals: one line each, exit 2, the ledger left as it was", () => {
   assert.equal(broken.status, 2);
   assert.deepEqual(lines(broken.stdout), ["--ledger line 1 is not a ledger row"]);
   assert.equal(readFileSync(join(dir, "broken", "ledger.jsonl"), "utf8"), "{}\n");
+});
+
+test("a ledger reached through a linked folder inside --out is refused; nothing is written outside", () => {
+  mkdirSync(join(dir, "outside"));
+  mkdirSync(join(dir, "proj2"));
+  symlinkSync(join(dir, "outside"), join(dir, "proj2", "logs"));
+  // A request shaped against that ledger (none there yet, so attempt 1).
+  const shaped = film("request", dir, ["--clip", "clips/W01.json", "--provider", "openrouter", "--ledger", "proj2/logs/ledger.jsonl", "--out", "s5", "--start-artifact", "a1", "--window-artifact", "a2"]);
+  assert.equal(shaped.status, 0, shaped.stdout + shaped.stderr);
+  for (const ledger of ["proj2/logs/ledger.jsonl", "proj2/logs/deeper/ledger.jsonl"]) {
+    const result = film("ledger", dir, ["--ledger", ledger, "--out", "proj2", "--asked", "s5/W01.request.json"]);
+    assert.equal(result.status, 2, `${ledger}: ${result.stdout}${result.stderr}`);
+    assert.deepEqual(lines(result.stdout), ["--ledger must be inside --out (the ledger is appended to)"], ledger);
+  }
+  assert.deepEqual(readdirSync(join(dir, "outside")), []);
+  assert.deepEqual(readdirSync(join(dir, "proj2")), ["logs"]);
+  // A real folder inside --out, made or not yet made, is fine.
+  const fine = film("ledger", dir, ["--ledger", "proj2/real/ledger.jsonl", "--out", "proj2", "--asked", "s5/W01.request.json"]);
+  assert.equal(fine.status, 0, fine.stdout + fine.stderr);
+  assert.equal(rowsOf("proj2/real/ledger.jsonl").length, 1);
 });
 
 test("the ledger is never written through a link; anything unexpected is exit 1", () => {
