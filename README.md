@@ -1496,7 +1496,9 @@ and `model depth is not in "/opt/models" (run ...)`.
   `--footage: "s004" footage "../board/shots.json" is outside the footage folder`,
   `--footage: "s004" plays "shot-01.mp4", which is not in the footage folder`,
   `--plates: "p-dawn.png" cannot be read as an image`,
-  `--edl: "s003" has an entry that is not segs, plate, footage or design`
+  `--edl: "s003" has an entry that is not segs, plate, footage or design`,
+  `--edl: "s002" segs is empty, so the shot has nothing to play`,
+  `--edl: "s002" segs[1] names neither a clip nor a plate` (every segment plays a take or a plate; either would leave the shot black)
 - the fit checks below measure the text drawn: an entry with no text of its own is fitted on its display line
 - `--board: "s005" is plate3d and needs a treatment (one of push, drift, parallax-left, parallax-right, rise, settle)`,
   `--board: "s002" type[1] shows 3 sung words, line 1 has 4 in words.json`,

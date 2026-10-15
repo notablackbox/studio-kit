@@ -308,6 +308,14 @@ export function buildPlan(input: PlanInputs): { plan: Plan | null; problems: str
     if (!isObj(entry)) {
       report(`--edl: ${q(id)} has no entry`);
     } else if (Array.isArray(entry.segs)) {
+      // Every segment plays something: a take or a plate. An empty list, or a segment naming
+      // neither, would leave the shot black.
+      if (entry.segs.length === 0) report(`--edl: ${q(id)} segs is empty, so the shot has nothing to play`);
+      entry.segs.forEach((seg, n) => {
+        if (!isObj(seg) || (typeof seg.clip !== "string" && typeof seg.plate !== "string")) {
+          report(`--edl: ${q(id)} segs[${n}] names neither a clip nor a plate`);
+        }
+      });
       for (const seg of entry.segs.filter(isObj)) {
         const segT0 = num(seg.t0) ?? t0;
         const clip = str(seg.clip);

@@ -144,6 +144,8 @@ test("refusals before any work: flags, chapter, range, a missing take, footage o
   writeFileSync(join(p.dir, "edit", "escape.json"), JSON.stringify({ ...edl, s004: { footage: "../board/shots.json" } }));
   writeFileSync(join(p.dir, "edit", "badplate.json"), JSON.stringify({ ...edl, s001: { plate: "../board/shots" } }));
   writeFileSync(join(p.dir, "edit", "badtake.json"), JSON.stringify({ ...edl, s002: { segs: [{ t0: 0.976, clip: "../W01-t2", in: 0.31 }] } }));
+  writeFileSync(join(p.dir, "edit", "nosegs.json"), JSON.stringify({ ...edl, s002: { segs: [] } }));
+  writeFileSync(join(p.dir, "edit", "blankseg.json"), JSON.stringify({ ...edl, s002: { segs: [{ t0: 0.976, clip: "W01-t2", in: 0.31 }, { t0: 2, in: 0 }, "x"] } }));
   const wide = structuredClone(CHAPTER_BOARD);
   const long = "The city WAKES-AND-EVERY-SINGLE-WINDOW-ON-THE-BLOCK-IS-LIT-UP";
   wide.shots[1].type[0] = { line: 0, mode: "coverline", text: long, placement: "left" };
@@ -178,6 +180,8 @@ test("refusals before any work: flags, chapter, range, a missing take, footage o
     [swap(base, "--edl", "edit/escape.json"), ['--footage: "s004" footage "../board/shots.json" is outside the footage folder']],
     [swap(base, "--edl", "edit/badplate.json"), ['--edl: "s001" names plate "../board/shots", which is not a plate key']],
     [swap(base, "--edl", "edit/badtake.json"), ['--edl: "s002" names take "../W01-t2", which is not <clip>-t<n>']],
+    [swap(base, "--edl", "edit/nosegs.json"), ['--edl: "s002" segs is empty, so the shot has nothing to play']],
+    [swap(base, "--edl", "edit/blankseg.json"), ['--edl: "s002" segs[1] names neither a clip nor a plate', '--edl: "s002" segs[2] names neither a clip nor a plate']],
     [swap(base, "--board", "board/wide.json"), [`--board: "s002" type[0] coverline "${long}" does not fit one line at 56 px (16:9)`]],
     [swap(base, "--board", "board/control.json"), [`--board: "s002" type[0] coverline "${long.replace("EVERY-", "EVERY\\u0085")}" does not fit one line at 56 px (16:9)`]],
     [swap(base, "--plates", "bare-plates"), ['--plates: "s005" is plate3d and plate "p-roof" has no near, mid and far mattes']],
