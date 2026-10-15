@@ -554,6 +554,10 @@ test("a malformed board is refused: exit 2, one line per problem, nothing writte
     // A mistyped anchor slot, named with its shot; an anchor of neither shape.
     [(_b, s) => ((s[1].devices as Record<string, unknown>[])[0].anchor = { slot: "rigth" }), ['--board: shots[1].devices[0].anchor.slot is "rigth", want one of left, right, top, top-left, top-right, bottom, bottom-left, bottom-right, centre, center (shot "s002")']],
     [(_b, s) => ((s[1].devices as Record<string, unknown>[])[0].anchor = { x: 10 }), ['--board: shots[1].devices[0].anchor is {"x":10}, want a slot (left, right, top, top-left, top-right, bottom, bottom-left, bottom-right, centre, center) or {x, y} in percent (shot "s002")']],
+    // A declared device trigger outside its shot (s002: 0.976 to 5.473 s, frames 24 to 131):
+    // at the shot's end it would never be drawn; before its start, likewise not where declared.
+    [(_b, s) => Object.assign((s[1].devices as Record<string, unknown>[])[0], { key: "T", params: { text: "CITY STATUS: AWAKE", at: 5.473 } }), ['--board: shots[1].devices[0].params.at is 5.473, want a time inside shot "s002" (0.976 to 5.473 s, frames 24 to 131)']],
+    [(_b, s) => Object.assign((s[1].devices as Record<string, unknown>[])[0], { key: "F", params: { text: "CITY STATUS: AWAKE", at: 10 } }), ['--board: shots[1].devices[0].params.at is 10, want a frame inside shot "s002" (0.976 to 5.473 s, frames 24 to 131)']],
     [(_b, s) => (s[4].treatment = "zoom"),['--board: shots[4].treatment is "zoom", want one of push, drift, parallax-left, parallax-right, rise, settle, or null']],
     [(_b, s) => (s[4].plate = "../p-roof"), ['--board: shots[4].plate is "../p-roof", want a key of letters, digits, dot, dash or underscore, or null']],
     [(b) => ((b.chapters as Record<string, unknown>[])[0].box = 7), ["--board: chapters[0].box is 7, want a short text (at most 60 characters)"]],

@@ -989,7 +989,16 @@ clock, no state kept between frames (the history check proves it).
   `params.rows`, a row a sixteenth). A device enters on its key: `W` its line's
   first word, `B` the next beat, `H` the next hit of `hits.json` (else the next
   kick or snare), `F` the song frame `params.at`, `T` the song time
-  `params.at`, and runs to the shot's end. The sixteenths are the beat map's
+  `params.at`, and runs to the shot's end. The trigger lies inside the shot: a
+  device that would enter on or after the shot's last frame (whatever its key)
+  would never be drawn and is refused by the plan
+  (`--board: "s002" devices[0] (label, key T) enters at 3.987 s, at or after the shot's end at 3.987 s: it would never be drawn`),
+  as is a declared `params.at` before the shot's start
+  (`--board: "s002" devices[0] (label, key T) params.at is 0.500 s, before the shot's start at 0.976 s`);
+  the board check refuses a declared `F` or `T` trigger outside its shot's
+  frames for every board command, `film:audit` among them
+  (`--board: shots[1].devices[0].params.at is 5.473, want a time inside shot "s002" (0.976 to 5.473 s, frames 24 to 131)`).
+  The sixteenths are the beat map's
   beats, eighths and the eighths' midpoints. Anchors are a slot (`left`,
   `right`, `top`, `top-left`, `top-right`, `bottom`, `bottom-left`,
   `bottom-right`, `centre` or `center`, one list, `DEVICE_SLOTS` in

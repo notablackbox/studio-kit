@@ -444,6 +444,18 @@ export function buildPlan(input: PlanInputs): { plan: Plan | null; problems: str
       else if (key === "H") at = after(hitTimes) ?? after(drumTimes) ?? ref;
       else if (key === "F") at = num(params.at) !== null ? (num(params.at) as number) / FILM_FPS : ref;
       else if (key === "T") at = num(params.at) ?? ref;
+      // The trigger lies inside the shot: a declared time before its start, or any key time on
+      // or past its last frame (never drawn), is reported, never silently clamped or skipped.
+      const declared = (key === "F" || key === "T") && num(params.at) !== null;
+      const who = `${q(id)} devices[${n}] (${kind}, key ${key})`;
+      if (declared && at < t0 - 1e-6) {
+        report(`--board: ${who} params.at is ${at.toFixed(3)} s, before the shot's start at ${t0.toFixed(3)} s`);
+        return;
+      }
+      if (frameAt(at) >= frameAt(t1)) {
+        report(`--board: ${who} enters at ${at.toFixed(3)} s, at or after the shot's end at ${t1.toFixed(3)} s: it would never be drawn`);
+        return;
+      }
       at = Math.max(at, t0);
       const a = d.anchor;
       let anchor: Anchor;

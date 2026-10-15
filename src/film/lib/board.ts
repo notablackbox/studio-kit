@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { Refused, shown } from "./cli.ts";
-import { DEVICE_SLOTS } from "../../remotion/film/plan.ts";
+import { DEVICE_SLOTS, FILM_FPS, frameAt } from "../../remotion/film/plan.ts";
 
 // The board, `shots.json`, in claudia.gallery's formats (wiki/formats, "The board"), with the
 // kit's v0.2.0 additions: a shot's `genuine` and `footage` (real product footage, checked
@@ -141,6 +141,16 @@ export function boardProblems(raw: unknown): string[] {
             if (!(DEVICE_KEYS as readonly unknown[]).includes(entry.key)) bad(`${p}.key`, entry.key, oneOf(DEVICE_KEYS));
             if (entry.line != null && !isIndex(entry.line)) bad(`${p}.line`, entry.line, "a line number or null");
             if ("params" in entry && !isObject(entry.params)) bad(`${p}.params`, entry.params, "an object");
+            // A declared trigger (key F: a frame, key T: seconds) lies inside the shot, on a frame
+            // the shot plays (frameAt(t0) up to frameAt(t1)): one outside is never drawn.
+            const declared = isObject(entry.params) && isNumber(entry.params.at) ? entry.params.at : null;
+            if ((entry.key === "F" || entry.key === "T") && declared !== null && isNumber(shot.t0) && isNumber(shot.t1)) {
+              const t = entry.key === "F" ? declared / FILM_FPS : declared;
+              if (t < shot.t0 - 1e-6 || frameAt(t) >= frameAt(shot.t1)) {
+                const where = typeof shot.id === "string" ? `shot ${shown(shot.id)} ` : "";
+                bad(`${p}.params.at`, declared, `${entry.key === "F" ? "a frame" : "a time"} inside ${where}(${shot.t0} to ${shot.t1} s, frames ${frameAt(shot.t0)} to ${frameAt(shot.t1) - 1})`);
+              }
+            }
             if ("anchor" in entry && entry.anchor !== null) {
               const a = entry.anchor;
               const xy = isObject(a) && isNumber(a.x) && isNumber(a.y);

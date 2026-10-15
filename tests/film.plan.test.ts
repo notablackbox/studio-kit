@@ -292,6 +292,22 @@ test("a device anchor slot not in the slot list is refused, naming the slot and 
   }
 });
 
+test("a device whose trigger falls outside its shot is reported, naming the shot and the device", () => {
+  // s002 runs 0.976 to 3.987 s (frames 24 to 95).
+  const board = structuredClone(CHAPTER_BOARD) as typeof CHAPTER_BOARD;
+  const device = board.shots[1].devices[0] as { key: string; params: Record<string, unknown> };
+  Object.assign(device, { key: "T", params: { text: "CITY STATUS: AWAKE", at: 3.987 } });
+  assert.deepEqual(problemsOf(board), ['--board: "s002" devices[0] (label, key T) enters at 3.987 s, at or after the shot\'s end at 3.987 s: it would never be drawn']);
+  // On the shot's last frame (95 is 3.958 s) it is drawn.
+  device.params.at = 3.958;
+  assert.deepEqual(problemsOf(board), []);
+  // A frame key past the shot, and a time before its start.
+  Object.assign(device, { key: "F", params: { text: "CITY STATUS: AWAKE", at: 96 } });
+  assert.deepEqual(problemsOf(board), ['--board: "s002" devices[0] (label, key F) enters at 4.000 s, at or after the shot\'s end at 3.987 s: it would never be drawn']);
+  Object.assign(device, { key: "T", params: { text: "CITY STATUS: AWAKE", at: 0.5 } });
+  assert.deepEqual(problemsOf(board), ['--board: "s002" devices[0] (label, key T) params.at is 0.500 s, before the shot\'s start at 0.976 s']);
+});
+
 test("the fit check measures the text drawn: an entry with no text of its own is fitted on its display line", () => {
   const board = structuredClone(CHAPTER_BOARD) as typeof CHAPTER_BOARD;
   board.shots[5].type[0].text = "";
