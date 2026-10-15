@@ -3,4 +3,4 @@
 // film:chapter runs it over every frame in Node and writes `<chapter>.tokens.json`. One
 // function, so the sidecar and the pixels cannot disagree about what a frame shows.
 export { tokensSidecar, audioEvents, frameState } from "./plan.ts";
-export type Sidecar = { fps: number; chapter: string; frames: { t: number; tokens: { word: number; text: string }[] }[] };
+export type Sidecar = { fps: number; chapter: string; ramp: boolean; frames: { t: number; tokens: { word: number; text: string }[] }[] };

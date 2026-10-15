@@ -47,6 +47,7 @@ test("a ten-second chapter renders straight to video, with its tokens sidecar, s
   assert.equal(report.inputs.board, join(p.dir, "board", "shots.json"));
   const sidecar = readJson(join(p.dir, "ch", "ch01.tokens.json"));
   assert.equal(sidecar.fps, 24);
+  assert.equal(sidecar.ramp, true);
   assert.equal(sidecar.frames.length, 240);
   assert.deepEqual(sidecar.frames[24], { t: 1, tokens: [{ word: 0, text: "The" }] });
   assert.deepEqual(readJson(join(p.dir, "ch", "ch01.audio.json")).map((e: { t: number; kind: string }) => [e.t, e.kind]), [[1, "stamp"], [3, "tick"], [6.5, "whoosh"]]);
@@ -110,6 +111,7 @@ test("a board built to flash (four masthead swaps a second, ramps off) fails the
   const made = timed("film:chapter --no-ramp, 1.5 seconds", () => film("chapter", f.dir, args, { FILM_TEST: "1" }));
   assert.equal(made.status, 0, made.stdout + made.stderr);
   assert.equal(readJson(join(f.dir, "ch", "chapter-report.json")).ramp, false);
+  assert.equal(readJson(join(f.dir, "ch", "fl.tokens.json")).ramp, false);
   const result = film("flash", f.dir, ["--video", "ch/fl.mp4", "--out", "flash"]);
   assert.equal(result.status, 3, result.stdout + result.stderr);
   assert.match(lines(result.stdout)[0], /^flash: [4-9] flashes in one second between /);

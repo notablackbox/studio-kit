@@ -19,10 +19,14 @@ before(() => {
     const made = spawnSync("ffmpeg", ["-y", "-loglevel", "error", "-f", "lavfi", "-i", `sine=frequency=330:duration=${seconds}:sample_rate=48000`, "-c:a", "pcm_s24le", join(dir, name)]);
     assert.equal(made.status, 0);
   }
-  // A chapter rendered with the test-only --no-ramp: its report beside it says so.
+  // Each chapter's tokens sidecar beside it records how it was rendered (ramp true); one
+  // rendered with the test-only --no-ramp says ramp false; one has no sidecar at all.
+  for (const name of ["ch01", "ch02", "wide"]) writeFileSync(join(dir, `${name}.tokens.json`), JSON.stringify({ fps: 24, chapter: name, ramp: true, frames: [] }));
   mkdirSync(join(dir, "unramped"));
   fakeVideo(join(dir, "unramped", "fl.mp4"), 2, "testsrc2", "640x360");
-  writeFileSync(join(dir, "unramped", "chapter-report.json"), JSON.stringify({ ok: true, outputs: { video: "fl.mp4" }, ramp: false }));
+  writeFileSync(join(dir, "unramped", "fl.tokens.json"), JSON.stringify({ fps: 24, chapter: "fl", ramp: false, frames: [] }));
+  mkdirSync(join(dir, "bare"));
+  fakeVideo(join(dir, "bare", "ch09.mp4"), 2, "testsrc2", "640x360");
 });
 
 function probe(file: string) {
@@ -57,7 +61,9 @@ test("refusals: chapters of different sizes, a mix that is not audio, missing fl
     [["--chapters", "ch01.mp4", "wide.mp4", "--mix", "mix.wav", "--out", "x"], ['--chapters: "wide.mp4" measures 320x180, the first 640x360']],
     [["--chapters", "ch01.mp4", "--mix", "ch02.mp4", "--out", "x"], ["--mix cannot be read as audio"]],
     [["--chapters", "ch01.mp4", "ch02.mp4", "--mix", "short.wav", "--out", "x"], ["--mix runs 2.000 s, shorter than the chapters (3.500 s)"]],
-    [["--chapters", "unramped/fl.mp4", "--mix", "mix.wav", "--out", "x"], ['--chapters: "fl.mp4" was rendered with --no-ramp (its report says ramp: false); give --allow-unramped to encode it anyway']],
+    [["--chapters", "ch01.mp4", "ch02.mp4", "--mix", "long.wav", "--out", "x"], ["--mix runs 5.000 s, longer than the chapters (3.500 s) by more than 0.5 s"]],
+    [["--chapters", "unramped/fl.mp4", "--mix", "short.wav", "--out", "x"], ['--chapters: "fl.mp4" was rendered with --no-ramp (its sidecar fl.tokens.json says ramp: false); give --allow-unramped to encode it anyway']],
+    [["--chapters", "bare/ch09.mp4", "--mix", "short.wav", "--out", "x"], ['--chapters: "ch09.mp4" has no tokens sidecar beside it (ch09.tokens.json) to show how it was rendered; give --allow-unramped to encode it anyway']],
   ];
   for (const [args, want] of cases) {
     const result = film("encode", dir, args);
@@ -67,13 +73,6 @@ test("refusals: chapters of different sizes, a mix that is not audio, missing fl
   assert.equal(existsSync(join(dir, "x")), false);
 });
 
-test("a mix that runs past the chapters makes an encode that overruns them: exit 1, nothing kept", () => {
-  const result = film("encode", dir, ["--chapters", "ch01.mp4", "ch02.mp4", "--mix", "long.wav", "--out", "over"]);
-  assert.equal(result.status, 1, result.stdout + result.stderr);
-  assert.equal(result.stdout, "");
-  assert.match(result.stderr, /^film:encode: master\.mp4 runs 5\.\d{3} s, the chapters 3\.500 s\n$/);
-  assert.ok(!existsSync(join(dir, "over", "master.mp4")));
-});
 
 test("an unramped chapter encodes only with --allow-unramped, recorded in the report", () => {
   const result = film("encode", dir, ["--chapters", "unramped/fl.mp4", "--mix", "short.wav", "--allow-unramped", "--out", "allowed"]);

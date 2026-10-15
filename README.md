@@ -881,15 +881,15 @@ clock, no state kept between frames (the history check proves it).
   nothing else is ramped, and dense swaps still flash; the flash check is the
   guard. `--no-ramp` switches cards in one frame so a board can be made to fail
   the flash check; it is for the kit's tests only and is refused without
-  `FILM_TEST=1` in the environment. The chapter report records `ramp`, and
-  `film:encode` refuses a chapter rendered with `ramp: false` unless
-  `--allow-unramped`.
+  `FILM_TEST=1` in the environment. The chapter report and the tokens sidecar
+  record `ramp`, and `film:encode` refuses a chapter rendered with
+  `ramp: false` unless `--allow-unramped`.
 
 `film:chapter` renders `<chapter>.mp4` (or `<chapter>.9x16.mp4` with
 `--vertical`) with `npx remotion render` (h264, BT.709, the kit's frame cache
 cap and family-kill runner, a 15-minute limit); `--range t0:t1` (song seconds,
 inside the chapter) renders part of it. It writes `<chapter>.tokens.json`, the
-lyric gate's sidecar (R1: `{fps: 24, chapter, frames: [{t, tokens: [{word, text}]}]}`,
+lyric gate's sidecar (R1: `{fps: 24, chapter, ramp, frames: [{t, tokens: [{word, text}]}]}`,
 one entry per frame rendered, `t` its song time) and `<chapter>.audio.json`, the
 sound events (`[{t, kind, gain, shot, what}]`: a device's entrance is a `tick`,
 `stamp` or `type`, a dither a `whoosh`), and `chapter-report.json` with
@@ -929,9 +929,9 @@ gain, ducks the events under the vocal stem with `sidechaincompress`, adds the
 master, and brings the mix to the master's own integrated loudness, measured
 with `ebur128`; the limiter runs only when the levelled mix would peak over
 -0.2 dBFS (the report says which). It writes `mix.wav` (48 kHz, 24-bit,
-stereo). Checked and failed (exit 3, the report written): an event at or past
-the master's end (no mix is made), and a mix more than 1 LU from the master
-after levelling. The four sounds are synthesised, never committed:
+stereo). An event at or past the master's end is refused before any work (exit
+2). A mix more than 1 LU from the master after levelling is checked and failed
+(exit 3, the report written); no test fixture forces that case. The four sounds are synthesised, never committed:
 `python3 -I src/film/py/film_py/sounds.py --dest <dir>` writes `tick.wav`,
 `stamp.wav`, `type.wav` and `whoosh.wav` (48 kHz 24-bit, a fixed seed); the
 image build runs it beside `models.py`.
@@ -942,9 +942,11 @@ preset slow, yuv420p, converted to and tagged BT.709 primaries, transfer and
 matrix) and `review.mp4` (CRF 20, `-maxrate 8M -bufsize 16M`). Both are read
 back with ffprobe: the duration within 0.5 s of the chapters' sum either way
 (nothing caps the length, so a mix that runs on shows as an overrun), the three
-tags, 24 fps, h264 and AAC, or exit 1. A mix shorter than the chapters is
-refused, and so is a chapter whose report beside it says `ramp: false`, unless
-`--allow-unramped`.
+tags, 24 fps, h264 and AAC, or exit 1 (the safety net). Refused before any
+encode: a mix shorter than the chapters by more than a frame or longer by more
+than 0.5 s; and, unless `--allow-unramped`, a chapter whose tokens sidecar
+beside it (`<name>.tokens.json`) says `ramp: false`, or that has no sidecar at
+all (fail closed).
 
 `film:reframe` is `film:chapter --vertical` with `--aspect 9:16`: the same
 timeline at 1080x1920, the picture across the frame's width on the brand's
@@ -1215,6 +1217,7 @@ and `model depth is not in "/opt/models" (run ...)`.
   `--plates: "s005" is plate3d and plate "p-roof" has no near, mid and far mattes`,
   `--footage: "s004" plays footage "shot-01.mp4" and no --footage folder was given`,
   `--footage: "s004" footage "../board/shots.json" is outside the footage folder`
+- the fit checks below measure the text drawn: an entry with no text of its own is fitted on its display line
 - `--board: "s005" is plate3d and needs a treatment (one of push, drift, parallax-left, parallax-right, rise, settle)`,
   `--board: "s002" type[1] shows 3 sung words, line 1 has 4 in words.json`,
   `--board: "s002" type[0] coverline "..." does not fit one line at 56 px (16:9)`,
@@ -1237,14 +1240,17 @@ and `model depth is not in "/opt/models" (run ...)`.
 - `film:mix: --master, --events, --vocals, --sounds and --out are required`
 - `--master cannot be read as audio` (`--vocals`), `--sounds is not a folder`,
   `--sounds has no tick.wav (make them with python3 -I src/film/py/film_py/sounds.py --dest <folder>)`
-- `--events: "ch01.audio.json"[1] kind "boom" is not one of tick, stamp, type, whoosh`,
+- `--events: "ch01.audio.json"[0] at 20.000 s is outside the master (12.000 s)`,
+  `--events: "ch01.audio.json"[1] kind "boom" is not one of tick, stamp, type, whoosh`,
   `... has no time (t, in song seconds)`, `... gain 2.5 is not 0 to 2`, `--events: "x.json" is not a list of events`
 
 `film:encode`: `film:encode: --chapters <mp4>..., --mix and --out are required`,
 `--chapters: "ch02.mp4" cannot be read as a video`, `--chapters: "wide.mp4" measures 320x180, the first 640x360`,
 `--chapters: "ch02.mp4" runs at 30 fps, want 24`, `--mix cannot be read as audio`,
 `--mix runs 2.000 s, shorter than the chapters (3.500 s)`,
-`--chapters: "fl.mp4" was rendered with --no-ramp (its report says ramp: false); give --allow-unramped to encode it anyway`.
+`--mix runs 5.000 s, longer than the chapters (3.500 s) by more than 0.5 s`,
+`--chapters: "fl.mp4" was rendered with --no-ramp (its sidecar fl.tokens.json says ramp: false); give --allow-unramped to encode it anyway`,
+`--chapters: "ch09.mp4" has no tokens sidecar beside it (ch09.tokens.json) to show how it was rendered; give --allow-unramped to encode it anyway`.
 
 `film:captions`: `film:captions: --words, --display and --out are required`,
 `--words is not a words.json`, `--display has 1 lyric line, words.json has 4`,
@@ -1258,7 +1264,6 @@ failing gate; `film:edl`, one `edl: "s004" has neither a take nor a plate (clip 
 per shot, and no `edl.json`; `film:sync`, `sync: "take-2.mp4" does not copy the window (NCC 0.04, want over 0.2)`;
 `film:gate`, `gate: 10/12` and a line per word not drawn; `film:history`, the differing pixel; `film:flash`,
 `flash: 4 flashes in one second between 0.042 and 2.000 s, want at most 3`; `film:mix`,
-`mix: "late.audio.json"[0] at 20.000 s is outside the master (12.000 s)` or
 `mix: -20.1 LUFS, the master -18.3 LUFS (-1.8 LU off, want within 1)`.
 
 Exit `1`, on stderr: `walk: the session file could not be removed`,

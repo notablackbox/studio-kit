@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { EXIT, Refused, Unexpected, fromCaller, isMain, outProblem, parseFlags, requireFile, run, shown, writeIn, writeReport } from "./lib/cli.ts";
@@ -11,33 +11,29 @@ import { RENDER_TIMEOUT, audioSeconds, moveIn, must, probeVideo, type VideoProbe
 // CRF 20 capped at 8 Mb/s. Both are read back with ffprobe: the duration must equal the
 // chapters' sum within 0.5 s, the three BT.709 tags must be there, and the rate 24 fps; a file
 // that does not measure up is a failure of the encode (exit 1): nothing caps the length, so an
-// overrun shows as well as a shortfall. Refused: a mix shorter than the chapters, and a chapter
-// whose report (chapter-report.json or reframe-report.json beside it) says `ramp: false` (the
-// test-only --no-ramp) unless --allow-unramped.
+// overrun shows as well as a shortfall (the safety net). Refused before any encode: a mix shorter
+// than the chapters by more than a frame or longer by more than 0.5 s, and, unless
+// --allow-unramped, a chapter whose tokens sidecar beside it (`<name>.tokens.json`, written by
+// film:chapter and film:reframe) says `ramp: false` (the test-only --no-ramp) or that has no
+// sidecar at all (fail closed).
 
 const COMMAND = "film:encode";
 const FPS = 24;
 
 const tags = ["-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709", "-color_range", "tv"];
 
-// The `ramp` a chapter's own report records, when a film:chapter or film:reframe report beside
-// it names this video; undefined when there is none.
-function unramped(file: string): boolean | undefined {
-  let names: string[] = [];
+// How a chapter was rendered, from its tokens sidecar beside it (one per video, so chapters
+// rendered into one folder never share it): ramped, unramped, or unknown (no readable sidecar).
+const sidecarOf = (file: string) => basename(file).replace(/\.mp4$/i, "") + ".tokens.json";
+function ramped(file: string): "yes" | "no" | "unknown" {
   try {
-    names = readdirSync(dirname(file)).filter((n) => n === "chapter-report.json" || n === "reframe-report.json");
+    const sidecar = JSON.parse(readFileSync(join(dirname(file), sidecarOf(file)), "utf8"));
+    if (sidecar?.ramp === true) return "yes";
+    if (sidecar?.ramp === false) return "no";
   } catch {
-    return undefined;
+    // no sidecar, or not one
   }
-  for (const name of names) {
-    try {
-      const report = JSON.parse(readFileSync(join(dirname(file), name), "utf8"));
-      if (report?.outputs?.video === basename(file)) return report.ramp === false;
-    } catch {
-      // not a report this command reads
-    }
-  }
-  return undefined;
+  return "unknown";
 }
 
 function check(name: string, p: VideoProbe | null, want: { duration: number; width: number; height: number }): string[] {
@@ -79,8 +75,10 @@ async function main(): Promise<number> {
     });
   }
   for (const file of chapters) {
-    if (values["allow-unramped"] || unramped(file) !== true) continue;
-    problems.push(`--chapters: ${shown(basename(file))} was rendered with --no-ramp (its report says ramp: false); give --allow-unramped to encode it anyway`);
+    if (values["allow-unramped"]) break;
+    const how = ramped(file);
+    if (how === "no") problems.push(`--chapters: ${shown(basename(file))} was rendered with --no-ramp (its sidecar ${sidecarOf(file)} says ramp: false); give --allow-unramped to encode it anyway`);
+    if (how === "unknown") problems.push(`--chapters: ${shown(basename(file))} has no tokens sidecar beside it (${sidecarOf(file)}) to show how it was rendered; give --allow-unramped to encode it anyway`);
   }
   const mix = requireFile(fromCaller(values.mix), "--mix");
   const mixSeconds = await audioSeconds(mix);
@@ -88,6 +86,9 @@ async function main(): Promise<number> {
   const sum = probes.reduce((s, p) => s + p.duration, 0);
   if (mixSeconds !== null && probes.length === chapters.length && mixSeconds < sum - 1 / FPS) {
     problems.push(`--mix runs ${mixSeconds.toFixed(3)} s, shorter than the chapters (${sum.toFixed(3)} s)`);
+  }
+  if (mixSeconds !== null && probes.length === chapters.length && mixSeconds > sum + 0.5) {
+    problems.push(`--mix runs ${mixSeconds.toFixed(3)} s, longer than the chapters (${sum.toFixed(3)} s) by more than 0.5 s`);
   }
   const out = fromCaller(values.out);
   const issue = outProblem(out);

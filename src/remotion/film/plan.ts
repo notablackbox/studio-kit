@@ -12,7 +12,7 @@ import { DEVICE_GAP, MIN_DEVICE_SCALE, deviceHeight, fitFace, geometry } from ".
 
 export const FILM_FPS = 24;
 export const DITHER_FRAMES = 12; // R4
-export const RAMP_FRAMES = 3; // R4: a full-frame luminance change ramps over at least three frames
+export const RAMP_FRAMES = 3; // R-c: a full-frame card ramps over three frames each side; cuts are cuts
 export const TYPE_LEAD_FRAMES = 6; // lyric typing finishes six frames before the cut
 export const CPS = { min: 16, base: 24, max: 40 }; // typing speed, characters a second
 export const MAX_ACCENTS = 2; // the accent on at most two elements per frame
@@ -379,7 +379,10 @@ export function buildPlan(input: PlanInputs): { plan: Plan | null; problems: str
     types.forEach((entry, n) => {
       const mode = str(entry.mode);
       if (mode !== "coverline" && mode !== "masthead" && mode !== "mass") return;
-      const text = plainText(str(entry.text) ?? "");
+      // The text drawn: the entry's own, else its line's display text (as the block resolves it).
+      const own = str(entry.text) ?? "";
+      const lineNo = num(entry.line);
+      const text = plainText(lineNo !== null && own.trim() === "" ? (display[lineNo] ?? "") : own);
       const size = mode === "coverline" ? shape.sizes.coverline : shape.sizes.masthead;
       const face = mode === "coverline" ? "text" : "headline";
       const fit = fitFace(mode === "coverline" ? text : text.toUpperCase(), face, size.min, size.min, shape.text, size.lines);
@@ -705,13 +708,14 @@ export function frameState(plan: Plan, frame: number): FrameState {
 }
 
 // The tokens sidecar (R1) for composition frames [a, b]: what each frame draws, by word.
-export function tokensSidecar(plan: Plan, a: number, b: number): { fps: number; chapter: string; frames: { t: number; tokens: { word: number; text: string }[] }[] } {
+// `ramp` records whether cards ramped (false only under the test-only --no-ramp): film:encode reads it.
+export function tokensSidecar(plan: Plan, a: number, b: number): { fps: number; chapter: string; ramp: boolean; frames: { t: number; tokens: { word: number; text: string }[] }[] } {
   const frames = [];
   for (let f = a; f <= b; f++) {
     const s = frameState(plan, f);
     frames.push({ t: s.t, tokens: s.tokens });
   }
-  return { fps: FILM_FPS, chapter: plan.chapter, frames };
+  return { fps: FILM_FPS, chapter: plan.chapter, ramp: plan.ramp, frames };
 }
 
 // The sound events the mix places for this chapter: each device's entrance, each dither and

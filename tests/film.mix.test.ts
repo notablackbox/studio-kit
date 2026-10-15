@@ -107,20 +107,12 @@ test("each event sits at its time, and one under a sung word is ducked 6 dB or m
   assert.ok(at(quiet) - at(loud) >= 6, `in silence ${at(quiet).toFixed(1)} dB, under the word ${at(loud).toFixed(1)} dB`);
 });
 
-test("an event outside the master is checked and failed: exit 3, the report written, no mix", () => {
-  writeFileSync(join(dir, "late.audio.json"), JSON.stringify([{ t: 20, kind: "tick", gain: 0.3 }]));
-  const result = film("mix", dir, ["--master", "song.wav", "--events", "late.audio.json", "--vocals", "vocals.wav", "--sounds", sounds, "--out", "late"]);
-  assert.equal(result.status, 3, result.stdout + result.stderr);
-  assert.deepEqual(lines(result.stdout), ['mix: "late.audio.json"[0] at 20.000 s is outside the master (12.000 s)']);
-  const report = JSON.parse(readFileSync(join(dir, "late", "mix-report.json"), "utf8"));
-  assert.equal(report.ok, false);
-  assert.deepEqual(readdirSync(join(dir, "late")), ["mix-report.json"]);
-});
-
-test("refusals: a kind with no sound, an unknown kind, missing flags", () => {
+test("refusals: an event outside the master, a kind with no sound, an unknown kind, missing flags", () => {
   writeFileSync(join(dir, "boom.audio.json"), JSON.stringify([{ t: 1, kind: "boom", gain: 0.3 }]));
+  writeFileSync(join(dir, "late.audio.json"), JSON.stringify([{ t: 20, kind: "tick", gain: 0.3 }]));
   const cases: [string[], string[]][] = [
     [["--master", "song.wav"], ["film:mix: --master, --events, --vocals, --sounds and --out are required"]],
+    [["--master", "song.wav", "--events", "late.audio.json", "--vocals", "vocals.wav", "--sounds", sounds, "--out", "x"], ['--events: "late.audio.json"[0] at 20.000 s is outside the master (12.000 s)']],
     [["--master", "song.wav", "--events", "boom.audio.json", "--vocals", "vocals.wav", "--sounds", sounds, "--out", "x"], ['--events: "boom.audio.json"[0] kind "boom" is not one of tick, stamp, type, whoosh']],
     [["--master", "song.wav", "--events", "ch01.audio.json", "--vocals", "vocals.wav", "--sounds", dir, "--out", "x"], ["--sounds has no tick.wav (make them with python3 -I src/film/py/film_py/sounds.py --dest <folder>)"]],
   ];

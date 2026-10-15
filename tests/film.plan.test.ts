@@ -254,3 +254,13 @@ test("9:16: a shot's devices step down together to fit the band above the pictur
   board.shots[1].devices.push(chart as never, chart as never);
   assert.deepEqual(problemsOf(board, { vertical: true }), ['--board: "s002" devices need 1216 px above the 9:16 picture, the band has 518 (they would shrink under 60 percent)']);
 });
+
+test("the fit check measures the text drawn: an entry with no text of its own is fitted on its display line", () => {
+  const board = structuredClone(CHAPTER_BOARD) as typeof CHAPTER_BOARD;
+  board.shots[5].type[0].text = "";
+  const long = "HOLD THE LIGHTHOUSEKEEPERSDAUGHTERSWEDDINGANNOUNCEMENTSCOLUMNS";
+  const display = `The city wakes.\nWe count the windows.\nHold on,\n${long}\n`;
+  assert.deepEqual(problemsOf(board, { display }), [`--board: "s006" type[0] masthead "${long}" does not fit two lines at 130 px (16:9)`]);
+  // The fixture's own display line fits.
+  assert.deepEqual(problemsOf(board), []);
+});
