@@ -17,7 +17,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 import { FPS, clipFrames, teaserFrames, type TeaserProps } from "./remotion/Teaser.tsx";
-import { shown } from "./walk.ts";
+import { shown } from "./film/lib/cli.ts";
 
 // Exit codes: 0 done and report written, 2 refused before any work, 1 anything unexpected.
 // Refusals go to stdout, one line per problem, and write nothing at all.

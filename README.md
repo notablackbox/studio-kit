@@ -4,10 +4,12 @@ A small kit for the nabb Studio: it records a short walk through the product
 with Playwright, cuts a 45 to 60 second teaser with Remotion, and turns a
 changelog entry into a card for the site. It is cloned into `/opt/studio` in the
 sandbox image and called through three npm scripts: `walk`, `render` and
-`changelog`.
+`changelog`. Since v0.2.0 it also carries the film engine, the `film:*` commands
+that make a music video by anabology's method ([film](#film)).
 
 Exit codes, the same in every script: `0` done and report written; `2` refused
-before any work (bad input, or `session rejected`); `1` anything unexpected.
+before any work (bad input, or `session rejected`); `3` checked and failed (the
+film checks only); `1` anything unexpected.
 Every refusal is printed on stdout, one line per problem; stderr carries only
 diagnostics. [Refusals](#refusals) lists every line each script can print.
 
@@ -31,10 +33,20 @@ npm test
 npm run changelog -- --in entry.md --out card.html
 ```
 
-In the container the CI uses, which is the same image the sandbox builds from:
+The film commands also want Python 3 with the pinned CPU wheels of
+`src/film/py/requirements.txt`, espeak-ng and sox (for the test song), and the
+model weights in `$FILM_MODELS` ([film](#film)). In the container the CI uses,
+which is the same image the sandbox builds from, with the same steps the CI runs:
 
 ```bash
-docker run --rm -v "$PWD":/kit -w /kit mcr.microsoft.com/playwright:v1.63.0-noble sh -c 'apt-get update && apt-get install -y --no-install-recommends ffmpeg fonts-inter fonts-noto-core fonts-noto-color-emoji && npm ci && npx remotion browser ensure && npm test'
+docker run --rm -v "$PWD":/kit -w /kit mcr.microsoft.com/playwright:v1.63.0-noble sh -c '
+  apt-get update &&
+  apt-get install -y --no-install-recommends ffmpeg fonts-inter fonts-noto-core fonts-noto-color-emoji fonts-noto-cjk sox espeak-ng python3 python3-pip python3-venv &&
+  python3 -m venv /opt/film-venv && export PATH=/opt/film-venv/bin:$PATH &&
+  pip install $(grep -E "^(torch|torchaudio|torchvision)==" src/film/py/requirements.txt) --index-url https://download.pytorch.org/whl/cpu &&
+  pip install -r src/film/py/requirements.txt &&
+  python3 -I src/film/py/film_py/models.py --dest /opt/models &&
+  npm ci && npx remotion browser ensure && npm test'
 ```
 
 In the sandbox the scripts are called as:
@@ -44,6 +56,8 @@ npm --prefix /opt/studio run walk -- --shotlist <path> --dry-run
 npm --prefix /opt/studio run walk -- --shotlist <path> --out <dir> [--synthetic] [--only <n>]
 npm --prefix /opt/studio run render -- --script <path> --clips <dir> --out <dir>
 npm --prefix /opt/studio run changelog -- --in <file.md> --out <file.html>
+npm --prefix /opt/studio run film:status -- --status <status.json> [--set field=value ...] [--out <dir>]
+npm --prefix /opt/studio run film:score -- --lyrics <lyrics.txt> --out <dir>
 ```
 
 ## `changelog`
@@ -258,6 +272,130 @@ Inter Regular and SemiBold from `brand/fonts`, loaded before any frame is
 taken; colours from `brand/palette.json` only; the brand SVGs shown as they
 are.
 
+## film
+
+The film engine: commands that take a song from a scored lyric to a delivered
+music video by anabology's method (claudia.gallery's wiki). Each is
+`npm --prefix /opt/studio run film:<name> -- <flags>`, declared in
+`package.json` as `tsx src/film/<name>.ts`.
+
+The contract, the same for every film command:
+
+- Exit `0`: done, and `<name>-report.json` written in `--out` (or beside the
+  file the command names), holding `ok`, the `inputs` it used and the `outputs`
+  it produced.
+- Exit `2`: refused before any work, one line per problem on stdout, nothing
+  written. A model the command needs that is not in `$FILM_MODELS` is a refusal.
+- Exit `3`: checked and failed, one line per failure on stdout, the report
+  written.
+- Exit `1`: anything unexpected, one short line on stderr in the kit's own words
+  (`film:<name>: ...`), never a stack trace and nothing on stdout.
+- Paths resolve against `INIT_CWD`, else the current directory; the kit finds
+  its own files from its own place. A command writes only in `--out` (or the
+  file it names), the system temp folder and `node_modules`. A value from the
+  input in a printed line is JSON-quoted, as walk and render print them, so one
+  problem is always one line. Nothing spends money or holds a key.
+
+The audio and vision work is Python, run as `python3 -I -m film_py.<module>`
+with the kit's `src/film/py` put first on the path (`-I` drops the current
+folder and every `PYTHON*` variable, so the kit puts back exactly its own
+folder; `-B` keeps it from writing bytecode beside the kit's sources;
+`FILM_PYTHON` names another interpreter). It runs through render's
+family-kill runner, with a time limit. A module prints one JSON document and
+exits 0, or prints refusal lines and exits 2; anything else is exit 1
+(`FILM_DEBUG=1` shows the module's own stderr). Its dependencies are CPU only
+and pinned in `src/film/py/requirements.txt`: torch, torchaudio and
+torchvision come first, from PyTorch's CPU index, then the rest.
+
+The model weights are downloaded once, at image build, into `$FILM_MODELS`
+(default `/opt/models`) by
+`python3 -I src/film/py/film_py/models.py --dest /opt/models` (`--only depth,mms_fa`
+for a subset): Depth Anything V2 Small (`depth-anything/Depth-Anything-V2-Small-hf`
+through transformers, at a pinned revision), torchaudio's `MMS_FA` aligner,
+demucs `htdemucs` and faster-whisper `tiny` (`Systran/faster-whisper-tiny`, at a
+pinned revision). None needs a token. `models.json` there lists each model's
+source, revision, files, sizes, sha256 and download time; a model that could
+not be fetched is listed as `missing` with the reason, and nothing stands in for
+it.
+
+### `film:status`
+
+`--status <status.json>` required; `--out <dir>` (default: the folder of the
+status file); `--set field=value ...`. Validates a production's control file
+against schema version 1, prints it and exits 0, or names the first wrong field
+in one line and exits 2:
+
+```json
+{
+  "version": 1,
+  "stage": "board",
+  "step": "audit",
+  "awaiting": { "kind": "ask", "id": "board-approval" },
+  "expects": [{ "key": "approve", "name": "Approve the board" }],
+  "sandbox_id": "sbx-0001",
+  "updated_at": "2026-10-15T08:00:00.000Z"
+}
+```
+
+`stage` is one of `brief`, `song`, `listen`, `cast`, `board`, `plates`,
+`footage`, `motion`, `build`, `cut`, `deliver`, `delivered`; `step` and
+`sandbox_id` non-empty strings; `awaiting` null or `{kind: "ask" | "files", id}`;
+`expects` a list of `{key, name}`; `updated_at` a UTC time. The fields are
+checked in that order, each missing then wrong, then any field the schema does
+not have, so a partial file, an older or newer `version` and an unknown field
+are all refused with the first one named.
+
+`--set stage=listen step=beats` (pairs after the first may stand alone, and
+`--set` may repeat) changes those fields, sets `updated_at` to now (always
+later than the time it replaces) and writes the file to a fresh name renamed
+into place. `awaiting` and `expects` take JSON (`awaiting=null`,
+`expects=[{"key":"master","name":"The master WAV"}]`). `version` and
+`updated_at` cannot be set; neither can a field the schema does not have. The
+result is validated as a whole before anything is written.
+
+`status-report.json`: `ok`, `inputs` (`status`, the `set` pairs), `outputs`
+(`status`, the file when it was written, else null; `report`) and the `status`.
+
+### `film:score`
+
+`--lyrics <lyrics.txt> --out <dir>`, both required. Scores a lyric sheet before
+any take is spent, after the song wiki's scorer. Section cues in square
+brackets (`[Verse 1 - spoken, deadpan]`) are skipped and name the section and
+its delivery (`spoken`, `sung` or `chant` from the cue's words; otherwise a
+verse is spoken and the rest sung). Per line, `score-report.json` holds the
+words with their syllables, stresses (`1` primary, `2` secondary, `0` weak) and
+`source` (`cmudict`, the bundled CMU dictionary; `fallback`, a letter-group
+count for a word it lacks; `letters`, an acronym said letter by letter;
+`digits`), the line's `syllables` and `stresses`, a `scansion` and an
+`assonance` score from 0 to 100, its `end_sound` and the line it rings with
+(`partner`). Per section and for the sheet, `scansion` and `assonance`. The
+scores are a diagnostic, never a gate: scansion spreads the line over Suno's
+two-bar slot and weighs stresses on the beat, their spacing, the length for
+the delivery and the line's shape; assonance is each line end's best rhyme,
+slant rhyme or shared final consonants within four lines, plus the stressed
+vowels echoed inside the line.
+
+`lint`, also printed on stdout after a one-line summary, one line each: a
+spoken line outside 10 to 13 syllables (`line 9: spoken line of 5 syllables,
+want 10 to 13`), a number in digits (`line 9: digit in "3": spell numbers
+out`), an all-caps acronym (`line 10: all-caps "AGI": spell an acronym out ("A G
+I")`), and a sheet over about 3,000 characters. Lint never changes the exit
+code.
+
+### The test song
+
+`python3 -I tests/fixtures/synth_song.py --out <dir>` builds the song every
+film test listens to, with exact ground truth and no licensed audio: twelve
+words in two sections, spoken by espeak-ng one word at a time (voice `en-us`,
+speed 150, pitch 50) and trimmed to their first and last sound, each starting
+on an eighth note; a kick on beats 1 and 3, a snare on 2 and 4 and a hat on
+every off-beat, generated with numpy from a fixed seed; the tempo rising
+linearly from 120 BPM at the first beat to 123 at the end. It writes `song.wav`
+(16-bit 44.1 kHz stereo, 12.0 s, sample for sample the sum of its stems),
+`vocals.wav`, `drums.wav`, `lyrics.txt`, `display.txt` and `truth.json` (every
+word's start and end, the beats, downbeats, kicks, snares and hats, the
+sections and the tempo law). Two builds are byte for byte the same.
+
 ## Refusals
 
 Every line below is printed on stdout and ends the script with exit `2`, with
@@ -322,10 +460,49 @@ for what the input held; a value from the input is printed JSON-quoted.
 - `changelog: cannot read the --in file`
 - `changelog: the first line holds no date`
 
+`film:status` (one line, naming the first problem):
+
+- `film:status: --status <path> is required`
+- `film:status: ...` with the argument parser's own words
+- `unexpected argument "..." (field=value pairs follow --set)`
+- `--set wants field=value, got "..."`,
+  `version and updated_at are set by film:status, not --set`,
+  `cannot set "...": not a field of status.json`, `X is set twice`,
+  `awaiting must be JSON: null or {kind, id}`,
+  `expects must be JSON: a list of {key, name}`
+- `status file cannot be read as JSON`, `status file is not a JSON object`
+- `X is missing` for a schema field; `version is N, want 1`;
+  `stage is "...", want one of brief, song, ...`;
+  `step must be a non-empty string`; `awaiting must be null or {kind, id}`,
+  `awaiting.kind is "...", want ask or files`,
+  `awaiting.id must be a non-empty string`,
+  `awaiting has an unknown field "..."`;
+  `expects must be a list of {key, name}`, `expects[N] must be {key, name}`,
+  `expects[N].key must be a non-empty string`,
+  `expects[N].name must be a non-empty string`,
+  `expects[N] has an unknown field "..."`;
+  `sandbox_id must be a non-empty string`;
+  `updated_at must be a UTC time written YYYY-MM-DDTHH:MM:SS(.sss)Z`;
+  `unknown field "..."`
+- `--out is not a folder`
+
+`film:score`:
+
+- `film:score: --lyrics <path> and --out <dir> are required`
+- `film:score: ...` with the argument parser's own words
+- `lyrics file cannot be read`, `lyrics file is over 64 KB`,
+  `lyrics file holds no lyric line`
+- `--out is not a folder`
+- `the cmudict dictionary is not installed (pip install -r src/film/py/requirements.txt)`
+
 Exit `1`, on stderr: `walk: the session file could not be removed`,
 `walk: unexpected failure`, `render: unexpected failure` (the report could not
 be written) and `changelog: unexpected failure`. A render step that fails exits
-`1` too, with the step's `error` in `render-report.json`.
+`1` too, with the step's `error` in `render-report.json`. A film command prints
+`film:<name>: unexpected failure`, or for its Python side
+`film:<name>: python film_py.<module> failed`,
+`... took longer than N minutes`, `... printed no result`, or
+`film:<name>: python3 could not be started`.
 
 ## Brand sources
 
@@ -347,12 +524,26 @@ Nothing is redrawn. The files come from nabb-fe `origin/main`.
   in `brand/fonts/OFL.txt`.
   - Release: https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip
   - sha256 of the zip: `9883fdd4a49d4fb66bd8177ba6625ef9a64aa45899767dde3d36aa425756b11e`
+- R4, film fonts. `brand/fonts/Anton-Regular.ttf` (the nabb wordmark's face)
+  comes from the Google Fonts repository at a pinned commit, with its `OFL.txt`;
+  `IBMPlexMono-Regular.ttf` and `IBMPlexMono-Medium.ttf` come from
+  `fonts/complete/ttf/` of IBM's `@ibm/plex-mono@2.5.0` release, with its
+  `LICENSE.txt`. Each family's licence is under its own heading in
+  `brand/fonts/OFL.txt`.
+  - Anton: https://raw.githubusercontent.com/google/fonts/cee74d7ca45d66d5c1878c828645c862f2788d2d/ofl/anton/Anton-Regular.ttf
+  - sha256 of `Anton-Regular.ttf`: `a4ba3a92350ebb031da0cb47630ac49eb265082ca1bc0450442f4a83ab947cab`
+  - Anton's licence: https://raw.githubusercontent.com/google/fonts/cee74d7ca45d66d5c1878c828645c862f2788d2d/ofl/anton/OFL.txt
+  - IBM Plex Mono: https://github.com/IBM/plex/releases/download/%40ibm%2Fplex-mono%402.5.0/ibm-plex-mono.zip
+  - sha256 of the zip: `6d23f01257663d8cc49a0d64c22ced630b79e0e2a0ac08a0da86e9a38bbc481c`
+  - sha256 of `IBMPlexMono-Regular.ttf`: `7c6fbddca4b700be918f5f6183d9bd4464fa427fe435f0b480d77fe2bb8c5a43`
+  - sha256 of `IBMPlexMono-Medium.ttf`: `98fbd727aae340b236955879dabed4d991aac9e8e90b3b2a67ce4a59221cc97c`
 
 ## Licences
 
 - The kit is MIT (see `LICENSE`).
-- Inter is licensed under the SIL Open Font License 1.1. The licence travels
-  with the fonts in `brand/fonts/OFL.txt`.
+- Inter, Anton and IBM Plex Mono are licensed under the SIL Open Font License
+  1.1. The licences travel with the fonts in `brand/fonts/OFL.txt`, one heading
+  per family.
 - Remotion is not MIT. Its free licence covers individuals and for-profit
   companies of up to 3 employees; a larger company needs a Remotion company
   licence (https://www.remotion.dev/license). Whether nabb needs one is open and

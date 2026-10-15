@@ -1,0 +1,18 @@
+# The film engine's Python side, CPU only.
+#
+# Install torch, torchaudio and torchvision first, from PyTorch's CPU index, so no CUDA
+# wheel is ever fetched:
+#   pip install torch==2.11.0 torchaudio==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cpu
+# then the rest:
+#   pip install -r src/film/py/requirements.txt
+# The three pins below repeat the first line; the CPU builds already installed satisfy them.
+torch==2.11.0
+torchaudio==2.11.0
+torchvision==0.26.0
+numpy==2.5.4
+soundfile==0.14.0
+pillow==12.3.0
+cmudict==1.1.3
+demucs==4.1.0
+transformers==5.19.0
+faster-whisper==1.2.1

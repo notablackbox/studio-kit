@@ -1,6 +1,6 @@
 {
   "name": "studio-kit",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -9,6 +9,8 @@
     "walk": "tsx src/walk.ts",
     "render": "tsx src/render.ts",
     "changelog": "tsx src/changelog.ts",
+    "film:status": "tsx src/film/status.ts",
+    "film:score": "tsx src/film/score.ts",
     "test": "node --import tsx --test tests/*.test.ts"
   },
   "dependencies": {

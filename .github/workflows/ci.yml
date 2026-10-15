@@ -8,10 +8,31 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: mcr.microsoft.com/playwright:v1.63.0-noble
+    env:
+      FILM_MODELS: /opt/models
+      PIP_CACHE_DIR: /tmp/pip-cache
     steps:
       - uses: actions/checkout@v4
       - run: git --version
-      - run: apt-get update && apt-get install -y --no-install-recommends ffmpeg fonts-inter fonts-noto-core fonts-noto-color-emoji
+      - run: apt-get update && apt-get install -y --no-install-recommends ffmpeg fonts-inter fonts-noto-core fonts-noto-color-emoji fonts-noto-cjk sox espeak-ng python3 python3-pip python3-venv
+      - uses: actions/cache@v4
+        with:
+          path: /tmp/pip-cache
+          key: pip-${{ runner.os }}-${{ hashFiles('src/film/py/requirements.txt') }}
+      # CPU wheels of torch, torchaudio and torchvision first, from PyTorch's own index (the pins
+      # are read from requirements.txt), then the rest; the venv goes first on the path.
+      - run: |
+          python3 -m venv /opt/film-venv
+          /opt/film-venv/bin/pip install $(grep -E '^(torch|torchaudio|torchvision)==' src/film/py/requirements.txt) --index-url https://download.pytorch.org/whl/cpu
+          /opt/film-venv/bin/pip install -r src/film/py/requirements.txt
+          echo /opt/film-venv/bin >> "$GITHUB_PATH"
+      - uses: actions/cache@v4
+        id: models
+        with:
+          path: /opt/models
+          key: models-${{ hashFiles('src/film/py/requirements.txt', 'src/film/py/film_py/models.py') }}
+      - if: steps.models.outputs.cache-hit != 'true'
+        run: python3 -I src/film/py/film_py/models.py --dest /opt/models
       - run: npm ci
       - run: npx remotion browser ensure
       - run: npm test
