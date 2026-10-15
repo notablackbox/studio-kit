@@ -99,6 +99,37 @@ test("saturated red flashes at equal luminance: six a second fail, two pass", ()
   assert.equal(report("red2").worst_red_second.count, 2);
 });
 
+// A gray 124 frame (linear 0.2016) whose top-left quarter (with a few pixels to spare for the
+// scaling to 96x54: 100x56 of 192x108) alternates every 2 frames (6 Hz) with gray `lit`; the
+// rest never changes, so the frame's mean moves by about a quarter of the region's change.
+function region(name: string, lit: number, seconds = 2): string {
+  const v = `if(lt(X,100)*lt(Y,56)*lt(mod(N,4),2),${lit},124)`;
+  const result = spawnSync("ffmpeg", [
+    "-y", "-loglevel", "error", "-f", "lavfi", "-i", `color=c=black:s=192x108:r=24:d=${seconds}`,
+    "-vf", `format=rgb24,geq=r='${v}':g='${v}':b='${v}'`,
+    "-c:v", "libx264rgb", "-preset", "ultrafast", "-qp", "0", join(dir, name),
+  ], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  return name;
+}
+
+test("a quarter of the frame flashing fails though the whole frame's mean barely moves", () => {
+  // 160 is linear 0.3515: the region changes by 0.15, the mean by under 0.05.
+  const fast = film("flash", dir, ["--video", region("area15.mp4", 160), "--out", "area15"]);
+  assert.equal(fast.status, 3, fast.stdout + fast.stderr);
+  const out = lines(fast.stdout);
+  assert.equal(out.length, 1);
+  assert.match(out[0], /^flash: 6 flashes in one second between \d\.\d{3} and \d\.\d{3} s, want at most 3$/);
+  const r = report("area15");
+  assert.equal(r.worst_second.count, 6);
+  assert.ok(r.transitions.every((t: { area: number }) => t.area >= 0.25));
+  assert.ok(Math.max(...r.mean_luminance) - Math.min(...r.mean_luminance) < 0.1);
+  // 137 is linear 0.2502: a change of 0.05, under WCAG's 0.1, is no flash however fast.
+  const faint = film("flash", dir, ["--video", region("area05.mp4", 137), "--out", "area05"]);
+  assert.equal(faint.status, 0, faint.stdout + faint.stderr);
+  assert.deepEqual(lines(faint.stdout), ["flash: clean, 48 frames, at most 0 flashes and 0 red flashes in any second, no pops"]);
+});
+
 test("refusals: missing flags, a file that is not a video", () => {
   const cases: [string[], string[]][] = [
     [["--video", "steady.mp4"], ["film:flash: --video and --out are required"]],

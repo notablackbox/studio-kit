@@ -5,8 +5,8 @@ import { EXIT, Failed, Refused, fromCaller, isMain, outProblem, parseFlags, pyth
 import { must, probeVideo } from "./lib/media.ts";
 
 // film:flash: the WCAG 2.3.1 flash check (toolkit item 21). ffmpeg decodes the video at 96x54
-// and 24 fps into temp; film_py.flash counts flashes (pairs of opposing luminance transitions of
-// 0.1 or more over a quarter of the frame) and single-frame pops (a frame over 0.03 off both
+// and 24 fps into temp; film_py.flash counts flashes (pairs of opposing luminance transitions:
+// runs of the frame's mean where a quarter of the pixels changed 0.1 or more, darker under 0.8) and single-frame pops (a frame over 0.03 off both
 // neighbours the same way), and red flashes (WCAG's separate rule: pairs of opposing changes, by a
 // quarter of the frame or more, in the share of pixels that are saturated red, R / (R + G + B)
 // >= 0.8). More than three flashes, or more than three red flashes, in any one-second window fails (exit 3,

@@ -7,10 +7,17 @@ raw file holds the video decoded by ffmpeg at 96x54 and 24 fps as rgb24 frames.
 
 - Each pixel's linear relative luminance (sRGB decoded, Rec. 709 weights), 0 to 1; each frame's
   mean.
-- A transition is a run of frames whose mean moves one way (steps under 0.002 continue the run)
-  by at least 0.1 in all, where the darker end is under 0.8 and at least a quarter of the frame's
-  pixels moved by 0.1 or more the same way (WCAG's general flash threshold, simplified to the
-  frame's mean and a quarter of its area).
+- WCAG 2.3.1's general flash is a pair of opposing changes in relative luminance of 0.1 or more
+  where the darker image is under 0.8, over an area large enough (a quarter of any 10 degree
+  field of view). Here the area is a quarter of the frame, and the change is measured per pixel,
+  not on the frame's mean: a quarter of the frame flashing moves the mean by only a quarter as
+  much.
+- The candidate stretches are the runs of frames whose mean moves one way (each step 0.002 or
+  more; a smaller step ends the run), however little the mean moves in all. A run is a transition
+  when, between its first and last frame, at least a quarter of the frame's pixels changed by 0.1
+  or more in the run's direction with the darker of their two values under 0.8.
+- What this does not see: two regions changing the opposite ways at once, so that the mean
+  stays within 0.002 a frame (each region's change is still caught when the mean moves with it).
 - A flash is a pair of opposing transitions, counted at the second one; pairs, not transitions.
 - Any one-second window (24 frames) holding more than three flashes fails.
 - The red flash, which WCAG defines apart from the general one: a pixel is saturated red when
@@ -77,14 +84,20 @@ def runs(series):
 
 
 def transitions(lum, means):
-    """Monotonic runs of the mean, kept when they pass the WCAG thresholds."""
+    """Monotonic runs of the mean, kept when a quarter of the pixels pass WCAG's thresholds.
+
+    Per pixel, between the run's first and last frame: a change of 0.1 or more in the run's
+    direction, the darker of the two values under 0.8. `change` is the mean's (for the report);
+    `area` the share of pixels that qualified.
+    """
     found = []
     for start, end, direction in runs(means):
-        change = means[end] - means[start]
-        darker = min(means[start], means[end])
-        moved = (lum[end] - lum[start]) * direction
-        area = float(np.mean(moved >= STEP))
-        if abs(change) >= STEP and darker < DARK and area >= AREA:
+        first, last = lum[start], lum[end]
+        moved = (last - first) * direction
+        qualifies = (moved >= STEP) & (np.minimum(first, last) < DARK)
+        area = float(np.mean(qualifies))
+        if area >= AREA:
+            change = means[end] - means[start]
             found.append({"from": int(start), "to": int(end), "dir": direction, "change": round(float(change), 4), "area": round(area, 3)})
     return found
 

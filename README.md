@@ -1019,9 +1019,13 @@ otherwise it prints `HISTORY-INDEPENDENT`. It keeps both PNGs in `--out`.
 remembers the frames a page has drawn, so the tests can show the check fails.
 
 `film:flash` (toolkit item 21) decodes the video at 96x54 and 24 fps and asks
-`film_py.flash`: linear relative luminance per pixel; a transition is a run of
-the frame's mean one way by 0.1 or more, the darker end under 0.8, a quarter of
-the pixels moving 0.1 the same way; a flash is a pair of opposing transitions
+`film_py.flash`: linear relative luminance per pixel; the candidate stretches
+are the runs of the frame's mean one way (each step 0.002 or more, however
+little in all), and a run is a transition when a quarter of the frame's pixels
+changed by 0.1 or more its way between its ends, the darker value under 0.8
+(measured per pixel, so a quarter of the frame flashing is caught though the
+mean moves a quarter as much; two regions changing opposite ways at once, the
+mean standing still, are not seen); a flash is a pair of opposing transitions
 (pairs, not transitions); more than three in any one-second window fails (exit
 3, one line per failing stretch). The red flash is WCAG's separate rule and is
 counted beside it: a pixel is saturated red when R / (R + G + B) >= 0.8 (the
