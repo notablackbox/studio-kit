@@ -1,0 +1,30 @@
+{
+  "secret": "OPENROUTER_API_KEY",
+  "url": "https://openrouter.ai/api/v1/videos",
+  "method": "POST",
+  "body": {
+    "model": "bytedance/seedance-2.5",
+    "prompt": "@Image1 sings @Audio1. Use @Image1 as the reference for her look, the set and the light. @Audio1 is her own voice and the whole soundtrack: copy it unchanged and add nothing. In @Audio1 she sings \"the city wakes we count the windows\"; her lips form each word as it sounds and rest closed in the silences. Close-up, she speaks the verse into the lens. One continuous shot, no cuts, no head turns. Only she sings. No text, letters or logos.",
+    "duration": 5,
+    "resolution": "720p",
+    "aspect_ratio": "16:9",
+    "generate_audio": true,
+    "input_references": [
+      {
+        "type": "image_url",
+        "image_url": {
+          "url": "{{artifact:art-p-street}}"
+        }
+      },
+      {
+        "type": "audio_url",
+        "audio_url": {
+          "url": "{{artifact:art-W01-wav}}"
+        }
+      }
+    ]
+  },
+  "estimate": 1.16,
+  "idempotency_key": "<key>",
+  "return": true
+}

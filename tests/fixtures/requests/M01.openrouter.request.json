@@ -1,0 +1,25 @@
+{
+  "secret": "OPENROUTER_API_KEY",
+  "url": "https://openrouter.ai/api/v1/videos",
+  "method": "POST",
+  "body": {
+    "model": "bytedance/seedance-2.5",
+    "prompt": "Story beat: she owns the roof as the song ends. Blocking at 0.0 s: she stands at the parapet, back to the city, the camera at her eye line. 0-1s: she breathes out and lifts her chin on the downbeat. 1-2s: she steps toward the lens on the beat, mouth closed. 2-4s: she stops, a small smile; the camera eases back and settles. Camera: medium shot, eye level, a slow pull back that ends at 2.5 s. She does not sing or speak. No text, letters or logos.",
+    "duration": 4,
+    "resolution": "720p",
+    "aspect_ratio": "16:9",
+    "generate_audio": false,
+    "frame_images": [
+      {
+        "type": "image_url",
+        "image_url": {
+          "url": "{{artifact:art-p-roof}}"
+        },
+        "frame_type": "first_frame"
+      }
+    ]
+  },
+  "estimate": 0.93,
+  "idempotency_key": "<key>",
+  "return": true
+}

@@ -1,0 +1,24 @@
+{
+  "reference": "M01",
+  "kind": "motion",
+  "provider": "openrouter",
+  "model": "bytedance/seedance-2.5",
+  "mode": "first_frame",
+  "attempt": 1,
+  "idempotency_key": "<key>",
+  "estimate": 0.93,
+  "duration": 4,
+  "resolution": "720p",
+  "rate_per_second": 0.231,
+  "prompt_words": 88,
+  "request": "M01.request.json",
+  "poll": {
+    "method": "GET",
+    "url": "https://openrouter.ai/api/v1/videos/{id}",
+    "body": null
+  },
+  "download": {
+    "from": "unsigned_urls[0]",
+    "fetch_to": "clips/M01/take-1.mp4"
+  }
+}

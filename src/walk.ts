@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 import type { Browser, BrowserContext, Page, Response } from "playwright";
+import { shown } from "./film/lib/cli.ts";
 
 // Exit codes: 0 done and report written, 2 refused before any work, 1 anything unexpected.
 // Lines the skills read ("shot list ok", "session rejected", ...) go to stdout.
@@ -49,13 +50,9 @@ function pageFor(routes: Route[], shot: Shot, only: boolean): { route: string; u
   return { route, usedFallback };
 }
 
-// An untrusted value as it appears in a printed line: JSON-quoted, so a line break or an
-// escape sequence in a shot list can never start a line of its own. JSON.stringify leaves
-// DEL, the C1 controls and the Unicode line separators raw; those are escaped too.
-export function shown(value: unknown): string {
-  const text = JSON.stringify(value) ?? String(value);
-  return text.replace(/[\u007f-\u009f\u2028\u2029]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
-}
+// An untrusted value as it appears in a printed line (one implementation, shared with render
+// and the film commands): JSON-quoted, so a line break in a shot list never starts a line.
+export { shown };
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

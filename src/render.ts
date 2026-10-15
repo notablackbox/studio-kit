@@ -17,7 +17,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 import { FPS, clipFrames, teaserFrames, type TeaserProps } from "./remotion/Teaser.tsx";
-import { shown } from "./walk.ts";
+import { shown } from "./film/lib/cli.ts";
 
 // Exit codes: 0 done and report written, 2 refused before any work, 1 anything unexpected.
 // Refusals go to stdout, one line per problem, and write nothing at all.
@@ -426,7 +426,7 @@ async function probe(tools: Tools, file: string): Promise<Probe> {
 // Remotion's own default for the OffthreadVideo frame cache is half the memory free when the
 // render starts; next to Chromium and the encoder that ran a 6 GB box out of memory. A fixed
 // 512 MB holds well over a second of 1080p frames, all one clip ever looks back on.
-const FRAME_CACHE_BYTES = 512 * 1024 * 1024;
+export const FRAME_CACHE_BYTES = 512 * 1024 * 1024;
 
 async function remotion(tools: Tools, args: string[], what: string, timeoutMs: number) {
   const flags = ["--log=error", `--offthreadvideo-cache-size-in-bytes=${FRAME_CACHE_BYTES}`];

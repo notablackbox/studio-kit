@@ -1,0 +1,35 @@
+{
+  "secret": "OPENROUTER_API_KEY",
+  "url": "https://openrouter.ai/api/v1/chat/completions",
+  "method": "POST",
+  "body": {
+    "model": "google/gemini-3-pro-image",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "medium shot of an adult performer at a rooftop parapet at dawn, the same face, hair and wardrobe as the reference, soft blue light, the city below out of focus, the lower third of the frame dark and empty, no text, no letters, no logos"
+          },
+          {
+            "type": "image_url",
+            "image_url": {
+              "url": "{{artifact:art-lead-front}}"
+            }
+          }
+        ]
+      }
+    ],
+    "modalities": [
+      "image",
+      "text"
+    ],
+    "image_config": {
+      "aspect_ratio": "16:9"
+    }
+  },
+  "estimate": 0.14,
+  "idempotency_key": "<key>",
+  "fetch_to": "plates/cands/P001/1.json"
+}

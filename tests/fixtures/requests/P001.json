@@ -1,0 +1,4 @@
+{"id": "P001", "kind": "image", "model": "google/gemini-3-pro-image",
+ "prompt": "medium shot of an adult performer at a rooftop parapet at dawn, the same face, hair and wardrobe as the reference, soft blue light, the city below out of focus, the lower third of the frame dark and empty, no text, no letters, no logos",
+ "refs": ["art-lead-front"],
+ "aspect_ratio": "16:9"}

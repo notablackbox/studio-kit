@@ -1,0 +1,13 @@
+{"id": "W01-c1", "shot": "s002", "kind": "sung", "status": "delivered",
+ "provider": "openrouter", "model": "bytedance/seedance-2.5",
+ "start": "clips/W01/take-2.mp4@3.321",
+ "song_t0": 3.97, "needed": [4.235, 5.345], "words": "the windows",
+ "window": {"t0": 3.97, "t1": 7.97, "mode": "clean", "file": "audio/windows/W01-c1.wav"},
+ "body": {"prompt": "close-up, she speaks the end of the line into the lens", "duration": 4, "resolution": "720p", "aspect_ratio": "16:9"},
+ "takes": [
+   {"n": 1, "provider": "openrouter", "status": "delivered", "file": "clips/W01-c1/take-1.mp4",
+    "sync": {"lag_s": 0.2, "ncc": 0.38, "mode": "copy", "synced": [[4.235, 5.345]], "diverge_at": null, "cut_at": null}}
+ ],
+ "covers": [],
+ "parent": "W01",
+ "why": "cover for W01: it diverges from our audio at song 4.02; this window starts in the word gap at 3.97"}

@@ -1,0 +1,24 @@
+{
+  "reference": "M01",
+  "kind": "motion",
+  "provider": "higgsfield",
+  "model": "bytedance/seedance-2.5",
+  "mode": "first_frame",
+  "attempt": 1,
+  "idempotency_key": "<key>",
+  "estimate": 2.8,
+  "duration": 4,
+  "resolution": "720p",
+  "rate_per_second": 0.7,
+  "prompt_words": 88,
+  "request": "M01.request.json",
+  "poll": {
+    "method": "GET",
+    "url": "https://api.higgsfield.ai/requests/{request_id}/status",
+    "body": null
+  },
+  "download": {
+    "from": "video.url",
+    "fetch_to": "clips/M01/take-1.mp4"
+  }
+}

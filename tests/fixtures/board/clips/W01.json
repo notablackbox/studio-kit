@@ -1,0 +1,13 @@
+{"id": "W01", "shot": "s002", "kind": "sung", "status": "delivered",
+ "provider": "openrouter", "model": "bytedance/seedance-2.5",
+ "start": "plates/p-street.png",
+ "song_t0": 0.976, "needed": [1.0, 5.345], "words": "the city wakes we count the windows",
+ "window": {"t0": 0.976, "t1": 5.473, "mode": "clean", "file": "audio/windows/W01.wav"},
+ "body": {"prompt": "close-up, she speaks the verse into the lens", "duration": 5, "resolution": "720p", "aspect_ratio": "16:9"},
+ "takes": [
+   {"n": 1, "provider": "openrouter", "status": "failed", "file": null},
+   {"n": 2, "provider": "openrouter", "status": "delivered", "file": "clips/W01/take-2.mp4",
+    "sync": {"lag_s": 0.31, "ncc": 0.41, "mode": "copy", "synced": [[1.0, 3.9]], "diverge_at": 4.02, "cut_at": 3.987}}
+ ],
+ "covers": ["W01-c1"],
+ "parent": null}
