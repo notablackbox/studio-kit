@@ -117,11 +117,28 @@ test("chapters: a gap or an overlap between chapters, a chapter short of the son
     failsOnly("chapters", gap, "chapters", ["s004"]),
     'gate chapters: a gap from 6.462 to 6.5 s between "ch01" and "ch02"; "s004" runs 6.462 to 10.883 s, outside chapter "ch02" (6.5 to 12 s)',
   );
-  // Within 0.03 s passes.
+  // Within 0.03 s, and on the same frame of the 24 fps grid (6.462 and 6.48 are both frame 156,
+  // the first frame at or after the time), passes.
   const close = changedBoard(dir, "chapters2.json", (b) => {
     b.chapters[1].t0 = 6.48;
   });
   assert.equal(audit(close, "chapters2").status, 0);
+  // Within 0.03 s but across a frame boundary (6.4583 s is frame 155): ch01 renders up to frame
+  // 154 and ch02 from frame 156, so frame 155 is in neither; the other way round, in both.
+  const dropped = changedBoard(dir, "chapters7.json", (b) => {
+    b.chapters[0].t1 = 6.455;
+  });
+  assert.equal(failsOnly("chapters", dropped, "chapters7", []), 'gate chapters: "ch01" ends at 6.455 s (frame 155) and "ch02" starts at 6.462 s (frame 156): frame 155 is in neither');
+  const twice = changedBoard(dir, "chapters8.json", (b) => {
+    b.chapters[0].t1 = 6.47;
+    b.chapters[1].t0 = 6.455;
+  });
+  assert.equal(failsOnly("chapters", twice, "chapters8", []), 'gate chapters: "ch01" ends at 6.47 s (frame 156) and "ch02" starts at 6.455 s (frame 155): frame 155 is in both');
+  // The first chapter must hold frame 0: 0.02 s is within 0.03 s of 0 but starts on frame 1.
+  const head = changedBoard(dir, "chapters9.json", (b) => {
+    b.chapters[0].t0 = 0.02;
+  });
+  assert.equal(failsOnly("chapters", head, "chapters9", []), 'gate chapters: the first chapter "ch01" starts at 0.02 s (frame 1): frame 0 is in no chapter');
   // An overlap, and the last chapter ending before the song.
   const overlap = changedBoard(dir, "chapters3.json", (b) => {
     b.chapters[0].t1 = 6.954;

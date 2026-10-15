@@ -3,12 +3,14 @@ import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { EXIT, Failed, Refused, fromCaller, isMain, outProblem, parseFlags, requireFile, run, shown, writeReport } from "./lib/cli.ts";
 import { lyricLines, readBoard, type Board, type Shot } from "./lib/board.ts";
+import { frameAt } from "../remotion/film/plan.ts";
 
 // film:audit: the board's gates (claudia.gallery's storyboard wiki, "The audit", and the kit's
 // v0.2.0 additions), each with its result and the shots that fail it:
 //   tile        the shots tile the song: no gap, no overlap, from 0 to the song's end;
-//   chapters    the chapters tile the song the same way (within 0.03 s), and every shot lies
-//               inside its chapter (the one it overlaps most), within 0.03 s;
+//   chapters    the chapters tile the song the same way (within 0.03 s, and on the 24 fps frame
+//               grid: adjacent edges on the same frame, the first on frame 0), and every shot
+//               lies inside its chapter (the one it overlaps most), within 0.03 s;
 //   cuts        every cut within 0.03 s of a beat, a hit in hits.json, or the hit its shot declares;
 //   sections    every shot's section is a section of the beat map;
 //   words       every word starts in a shot that lists its line and types it (an entry with
@@ -204,7 +206,10 @@ export function auditBoard(board: Board, analysis: Analysis, options: Options): 
   }
 
   // chapters: they tile [0, the song's end] within 0.03 s (each chapter renders its own frames
-  // and film:encode joins them), and each shot lies inside the chapter it overlaps most.
+  // and film:encode joins them), and each shot lies inside the chapter it overlaps most. A
+  // chapter renders frames frameAt(t0) up to frameAt(t1) (the chapter engine's rule), so
+  // adjacent edges within the tolerance must also land on the same frame: a frame between them
+  // would be in neither chapter (the film drops it), one on both sides in both (doubled).
   {
     const problems: string[] = [];
     const ids: string[] = [];
@@ -213,11 +218,17 @@ export function auditBoard(board: Board, analysis: Analysis, options: Options): 
     else {
       const first = chapters[0];
       const last = chapters[chapters.length - 1];
+      const frames = (from: number, to: number) => (to - from === 1 ? `frame ${from}` : `frames ${from} to ${to - 1}`);
       if (Math.abs(first.t0) > CHAPTER_EPS + EPS) problems.push(`the first chapter ${q(first.id)} starts at ${num(first.t0)} s, not 0`);
+      else if (frameAt(first.t0) !== 0) problems.push(`the first chapter ${q(first.id)} starts at ${num(first.t0)} s (frame ${frameAt(first.t0)}): ${frames(0, frameAt(first.t0))} ${frameAt(first.t0) === 1 ? "is" : "are"} in no chapter`);
       for (let k = 1; k < chapters.length; k++) {
         const [a, b] = [chapters[k - 1], chapters[k]];
+        const [end, start] = [frameAt(a.t1), frameAt(b.t0)];
+        const edges = `${q(a.id)} ends at ${num(a.t1)} s (frame ${end}) and ${q(b.id)} starts at ${num(b.t0)} s (frame ${start})`;
         if (a.t1 > b.t0 + CHAPTER_EPS + EPS) problems.push(`${q(a.id)} ends at ${num(a.t1)} s, after ${q(b.id)} starts at ${num(b.t0)} s`);
         else if (b.t0 > a.t1 + CHAPTER_EPS + EPS) problems.push(`a gap from ${num(a.t1)} to ${num(b.t0)} s between ${q(a.id)} and ${q(b.id)}`);
+        else if (start > end) problems.push(`${edges}: ${frames(end, start)} ${start - end === 1 ? "is" : "are"} in neither`);
+        else if (end > start) problems.push(`${edges}: ${frames(start, end)} ${end - start === 1 ? "is" : "are"} in both`);
       }
       if (Math.abs(last.t1 - song) > CHAPTER_EPS + EPS) problems.push(`the last chapter ${q(last.id)} ends at ${num(last.t1)} s, the song at ${num(song)} s`);
       for (const shot of shots) {

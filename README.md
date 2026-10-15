@@ -616,7 +616,7 @@ summary and the warnings. Any failing gate is exit 3, one line per gate:
 | Gate | Fails when |
 |---|---|
 | `tile` | a gap or an overlap between shots; the first shot not at 0, the last not at the song's end (`beats.json`'s duration); the board's `duration` not the song's |
-| `chapters` | the chapters not tiling the song from 0 to its end (a gap or an overlap over 0.03 s, the first not at 0, the last not at the song's end, or no chapters); a shot not inside its chapter (the one it overlaps most) within 0.03 s. Each chapter renders its own frames and `film:encode` joins them, so a gap or an overlap would shift the picture against the mix |
+| `chapters` | the chapters not tiling the song from 0 to its end (a gap or an overlap over 0.03 s, the first not at 0, the last not at the song's end, or no chapters); adjacent chapter edges, even within 0.03 s, that land on different frames of the 24 fps grid (a chapter renders from the first frame at or after its `t0` up to the first at or after its `t1`, the chapter engine's rule: `gate chapters: "ch01" ends at 6.455 s (frame 155) and "ch02" starts at 6.462 s (frame 156): frame 155 is in neither`, or `... in both` for a doubled frame), or a first chapter that does not start on frame 0; a shot not inside its chapter (the one it overlaps most) within 0.03 s. Each chapter renders its own frames and `film:encode` joins them, so a gap or an overlap would shift the picture against the mix |
 | `cuts` | a cut more than 0.03 s from a beat, from a hit in `hits.json`, or from the `hit` its shot declares |
 | `sections` | a shot's `section` that is not a section of the beat map |
 | `words` | a word (`words.json`) that starts in a shot whose `lines` leave its line out, or whose `type` has no text for it (a `type` entry for the line with empty text types its display line, as the chapter engine fills it; with neither, it fails) |
@@ -1149,7 +1149,7 @@ Found in review and left for a later release, one line each:
 - A real hat played within 45 ms of a snare is dropped as the snare's noise.
 - The audit does not check a shot's declared hit against `hits.json`, and any hit in `hits.json` passes a cut.
 - The audit does not warn about a clip no shot plays.
-- The audit does not check a shot's word line against `display.txt`, a plate key against `plates[]`, or that chapters tile the song.
+- The audit does not check a shot's word line against `display.txt` or a plate key against `plates[]`.
 - The depth test depends on the model's output.
 - A "no take" fallback is noted in the edl report only (the edit list format has no note field).
 - `{footage}` in the edit list plays from the file's first frame; there is no in point.
