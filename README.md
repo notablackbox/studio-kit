@@ -63,6 +63,10 @@ npm --prefix /opt/studio run film:beats -- --drums <drums.wav> --out <dir> [--ly
 npm --prefix /opt/studio run film:words -- --vocals <vocals.wav> --lyrics <lyrics.txt> --out <dir> [--display <display.txt>] [--expect <words.json>] [--min-conf X]
 npm --prefix /opt/studio run film:hits -- --stems <dir> --mix <song.wav> --out <dir> [--beats <beats.json>]
 npm --prefix /opt/studio run film:window -- --vocals <vocals.wav> --words <words.json> --from N --to N --out <dir> [--name <id>]
+npm --prefix /opt/studio run film:audit -- --board <shots.json> --beats <beats.json> --words <words.json> --hits <hits.json> --display <display.txt> --out <dir> [--lead-share 0.7] [--motion-seconds N] [--motion-clips N] [--taboo word,word] [--hooks "A|B|C"] [--defer provenance] [--walk-report <walk-report.json>] [--recordings <recordings.json>]
+npm --prefix /opt/studio run film:sheet -- --board <shots.json> --plates <dir> --out <dir>
+npm --prefix /opt/studio run film:depth -- --plate <plate.png> --out <dir>
+npm --prefix /opt/studio run film:edl -- --board <shots.json> --clips <dir> --words <words.json> --out <dir>
 ```
 
 ## `changelog`
@@ -509,6 +513,108 @@ window under 4 s or over 8 s is refused with its length. `--allow-short` lifts
 the 4 s floor; it exists for the kit's tests (the test song's phrases are
 short) and a production run never passes it.
 
+### The board: `film:audit`, `film:sheet`, `film:depth`, `film:edl`
+
+The board is `shots.json` in claudia.gallery's format (wiki/formats, "The
+board"): `{version: 1, duration, chapters, shots, plates}`. The kit adds three
+fields: a shot's `genuine` (true for real product footage) and `footage` (the
+recorded file it plays), and a chapter's `box` (a short text, at most 60
+characters). All three commands that read a board check it first and refuse it
+(exit 2, one line per problem, at most 20) when it does not fit: an unknown
+field at the top, in a shot, a type entry, a device, a chapter or a plate; a
+shot id that is not `s` and three digits, or is used twice; `t0` not before
+`t1`; a value outside its list (`framing` ECU, CU, MCU, MS, MWS, WS, FS, EWS,
+OTS; `motion_tier` still, plate3d, motion, sung; a type's `mode` subtitle,
+coverline, masthead, stack, mass; a device's `kind` counter, label, terminal,
+chart, strike, spec-sheet and `key` W, B, H, F, T; `treatment` push, drift,
+parallax-left, parallax-right, rise, settle or null; `transition_in` cut or
+dither); a plate key or clip id that is not letters, digits, `.`, `-` and `_`
+(it names a file). A missing framing, a TODO or an empty field is not a schema
+problem: the audit's `todo` gate reports it.
+
+`film:audit` runs every gate of the storyboard wiki's audit, and the kit's
+three more, over the board and the analysis. Each gate's result (`pass`,
+`fail`, `deferred` or `skipped`), the shots it names and its problems go in
+`audit-report.json`, with the board's sha256 (an approval is tied to it), a
+summary and the warnings. Any failing gate is exit 3, one line per gate:
+`gate <name>: <problem>; <problem>`, shot ids JSON-quoted.
+
+| Gate | Fails when |
+|---|---|
+| `tile` | a gap or an overlap between shots; the first shot not at 0, the last not at the song's end (`beats.json`'s duration); the board's `duration` not the song's |
+| `cuts` | a cut more than 0.03 s from a beat, from a hit in `hits.json`, or from the `hit` its shot declares |
+| `sections` | a shot's `section` that is not a section of the beat map |
+| `words` | a word (`words.json`) that starts in a shot whose `lines` leave its line out, or whose `type` has no text for it |
+| `graphics` | a lyric line (from `display.txt`, or listed by a shot) with no device naming it |
+| `lead` | her seconds on screen (`lead_on_screen`) under `--lead-share` of the song (default 0.7) |
+| `budget` | the sung and motion shots' seconds over `--motion-seconds`, or their clips over `--motion-clips`; `skipped` with neither flag |
+| `windows` | a sung shot outside 4 to 8 s or starting inside a word (it must start in a word gap: in `words.json`'s `gaps`, or between words); a motion shot outside 4 to 12 s |
+| `plates` | one plate on two shots that are not next to each other; two clips starting from one plate |
+| `banned` | a `--taboo` word (whole words, any case) in a shot's `action`, `prompt`, `type` text or `notes`, or a plate's prompt |
+| `treatments` | a 2.5D (`plate3d`) shot without a treatment, or two 2.5D shots in a row with the same one |
+| `todo` | `TODO`, `TBD` or `???` anywhere in the board; a shot with no framing or tier; a sung or motion shot with no clip; a 2.5D shot with no plate |
+| `genuine` | a `genuine` shot whose `footage` or `clip` is not a recorded shot of `--walk-report` (`shots[].file` with `status: recorded`) or an entry of `--recordings` (`recordings[].file`), matched by name; `deferred` with `--defer provenance` (the board step defers it, the build enforces it) |
+| `hook` | a `--hooks` entry (pipe-separated) that no shot types as a `masthead` or `mass` card (any case, spaces folded) |
+| `box` | two chapters in a row in the same `box` |
+
+It warns, without failing, when her share is over 85 percent, when two shots in
+a row come in with the same transition (other than `cut`), when a plate no shot
+uses is listed, and when a sung shot's prompt may put a microphone, a hand or
+hair in front of her mouth. At exit 0 it prints
+`audit: 15 gates, all pass: 5 shots, 12.00 s, lead 83.6%, 2 clips (8.92 s)`
+(with `(1 deferred)` or `(1 skipped)` when so) and one `warning: ...` line each.
+
+`film:sheet` prints the board for review: `sheet.pdf` (A4 landscape, Chromium
+through Playwright), the `sheet.html` it was printed from, and
+`sheet-report.json` (`pages`, `cards`, `plates_found`, `prompt_cards`,
+`face_flags`). The first page is the chapter map (id, name, time, sections,
+set, accent, box); then twelve cards a page, in time order, each with the
+plate (`<plates>/<plate>.png`, `.jpg` or `.jpeg`, embedded) or, where the plate
+does not exist yet, a prompt card (the prompt's first 220 characters on the
+shot's accent, else its chapter's); the id and time; the section and lines;
+the framing and tier; the action in one line; the first device in one line;
+and a `FACE?` badge when the shot's notes mention a face. Fonts are the kit's
+own (Anton, Inter, IBM Plex Mono), embedded. The page count is read back from
+the PDF and must be the cover plus one page per twelve cards.
+
+`film:depth` prepares a plate for 2.5D (ruling R3): Depth Anything V2 Small
+through transformers, on the CPU, resized to the plate and scaled to 16 bits,
+near bright (`<name>.depth.png`); three soft mattes cut from the map's
+terciles, far at or under the first, near at or over the second, mid between,
+each blurred with one Gaussian whose ramp spans about 2 percent of the width,
+so they add up to full white everywhere (`<name>.near.png`, `<name>.mid.png`,
+`<name>.far.png`, 8-bit grey); and `<name>.boxes.json` with
+`{faces: [], persons: [], detector: null, note}`, since the image carries no
+face or person detector. `<name>` is the plate's file name less `.png`. A
+plate must be a PNG of at least 256 px on each side. The same plate gives the
+same bytes. The report holds the size, the model, the terciles, each layer's
+share and the feather in pixels.
+
+`film:edl` writes `edl.json`, keyed by shot id (wiki/formats, "The edit
+list"). A sung or motion shot plays its clip's delivered take (`<clips>/<clip>.json`,
+the take with `status: delivered` and the highest `n`) from the shot's start:
+`{segs: [{t0, clip: "<clip>-t<n>", in}]}` with `in = t0 - song_t0 + lag_s`
+(lag 0 when the take has no `sync`). A sung take whose shot runs past its
+`sync.synced` spans is cut at its `sync.cut_at` to its first cover, which plays
+from there by its own `song_t0` and lag, down the chain. A still or 2.5D shot
+is `{plate}`. A hole is filled from the shot's plate and noted in the report
+(`fallbacks`, and a `fallback: ...` line on stdout): a clip or cover with no
+delivered take (or no file) is `no take`, a sung take that diverges with no
+cover is `no cover`; a clip with nothing delivered makes the whole shot
+`{plate}`. A shot left with neither a take nor a plate (including a pure
+motion-design shot with `plate: null`) fails: exit 3, one line each, the report
+written and no `edl.json`. The report also gives, per sung shot, its sung
+seconds (each word of `--words` padded 30 ms, merged under 0.12 s) and how many
+of them the in-sync spans cover. A clip file that does not parse, or whose `id`
+is not its file name, is refused.
+
+The board tests use `tests/fixtures/board/`: a five-shot board over the test
+song, the `beats.json`, `words.json` and `hits.json` the listening commands
+make from it (one test makes them again and audits the board against them),
+three clip files (one sung take cut to its cover, one straight), three plates
+written by `tests/fixtures/board/make_plates.ts` (the fourth is left out for
+the prompt card), a walk report and a recordings list.
+
 ### The test song
 
 `python3 -I tests/fixtures/synth_song.py --out <dir>` builds the song every
@@ -666,8 +772,42 @@ they need (`htdemucs` for stems; `mms_fa` and `whisper_tiny` for words).
 - `--words is not a words.json`
 - `window is 2.31 s (6.91 to 9.22), want 4 to 8 s`
 
-Exit `3`, `film:words` only, with `words.json` and the report written: the
-check's line and the words off, as in [Listening](#listening-filmstems-filmbeats-filmwords-filmhits-filmwindow).
+The board commands share these: `--X cannot be read` for a path flag that is
+not a readable file, `--board is not a JSON file`, one `--board: ...` line per
+schema problem (as in [The board](#the-board-filmaudit-filmsheet-filmdepth-filmedl)),
+`--out is not a folder` and the argument parser's own words after
+`film:<name>: `.
+
+`film:audit`:
+
+- `film:audit: --board, --beats, --words, --hits, --display and --out are required`
+- `--beats is not a beats.json`, `--words is not a words.json`,
+  `--hits is not a hits.json`, `--walk-report is not a walk-report.json`,
+  `--recordings is not a recordings.json`
+- `--display has 1 lyric line, words.json has 4`
+- `--lead-share is "1.5", want a share from 0 to 1`,
+  `--motion-seconds is "0", want seconds above 0`,
+  `--motion-clips is "2.5", want a whole number`,
+  `--defer is "beats", want provenance`
+
+`film:sheet`: `film:sheet: --board, --plates and --out are required`,
+`--plates is not a folder`.
+
+`film:depth`: `film:depth: --plate <png> and --out <dir> are required`,
+`--plate is not a PNG`, `--plate is 200x120 px, want at least 256 px on each side`,
+and `model depth is not in "/opt/models" (run ...)`.
+
+`film:edl`:
+
+- `film:edl: --board, --clips, --words and --out are required`
+- `--clips is not a folder`, `--words is not a words.json`
+- `--clips: "W02.json" is not a clip file`, `--clips: "W02.json" holds clip "W01"`
+
+Exit `3`, with the report written: `film:words`, the check's line and the words
+off, as in [Listening](#listening-filmstems-filmbeats-filmwords-filmhits-filmwindow),
+with `words.json` written too; `film:audit`, one `gate <name>: ...` line per
+failing gate; `film:edl`, one `edl: "s003" has neither a take nor a plate` line
+per shot, and no `edl.json`.
 
 Exit `1`, on stderr: `walk: the session file could not be removed`,
 `walk: unexpected failure`, `render: unexpected failure` (the report could not
@@ -679,7 +819,11 @@ be written) and `changelog: unexpected failure`. A render step that fails exits
 `film:<name>: "python3" could not be started` (the interpreter's name, from
 `FILM_PYTHON` when set, JSON-quoted). `film:window` prints
 `film:window: ffprobe could not be started` (or `ffmpeg`) when the tool is not
-on the path, and `film:window: ffmpeg could not encode the MP3`.
+on the path, and `film:window: ffmpeg could not encode the MP3`. `film:sheet`
+prints `film:sheet: the browser could not be started`,
+`film:sheet: the browser could not print the sheet`,
+`film:sheet: the browser took longer than 2 minutes` or
+`film:sheet: the sheet printed on N pages, not M`.
 
 ## Brand sources
 
