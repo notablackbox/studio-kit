@@ -820,7 +820,9 @@ provider, attempt, length, estimate and the key's first twelve digits:
 - `--asked <request.json> [--meta <request.meta.json>]`: a request film:request
   shaped, as asked (the meta file defaults to the request's sibling
   `<id>.request.meta.json`; the key is recomputed from the request's body and
-  the meta's provider, model and attempt, and a mismatch is refused);
+  the meta's provider, model and attempt, and a mismatch is refused; the
+  request's `estimate` must be an amount, a number 0 or more, and the meta's
+  `estimate`, else it is refused naming both);
 - `--polled <key> [--figures <json>]`;
 - `--delivered <key> --file <path> [--figures <json>]`;
 - `--declined <key> [--reason <text>] [--figures <json>]`;
@@ -1400,6 +1402,8 @@ and `model depth is not in "/opt/models" (run ...)`.
 - `--asked is not a request file`, `--meta cannot be read`, `--meta is not a request meta file`,
   `--meta goes with --asked only`,
   `--asked: the idempotency_key is not the key of the body, provider, model and attempt 2`,
+  `--asked: the request's estimate 0.5 is not the meta's 1.16`,
+  `--asked: the request's estimate -1 is not an amount (a number, 0 or more); the meta's is -1`,
   `--asked: key "..." is already in the ledger`,
   `--asked: "W01" attempt 1 is stale, the ledger holds 1 asked: shape the request again`,
   `--asked: "M01" was declined on higgsfield: no request for it on any provider`

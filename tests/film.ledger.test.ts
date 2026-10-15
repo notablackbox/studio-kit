@@ -191,6 +191,38 @@ test("refusals: one line each, exit 2, the ledger left as it was", () => {
   assert.equal(readFileSync(join(dir, "broken", "ledger.jsonl"), "utf8"), "{}\n");
 });
 
+test("the request's estimate must be an amount and the meta's: refused naming both otherwise", () => {
+  mkdirSync(join(dir, "s6"));
+  const request = JSON.parse(readFileSync(join(dir, "req", "W01.request.json"), "utf8"));
+  const meta = JSON.parse(readFileSync(join(dir, "req", "W01.request.meta.json"), "utf8"));
+  assert.equal(meta.estimate, request.estimate);
+  const E = ["--ledger", "est/ledger.jsonl", "--out", "est", "--asked", "s6/W01.request.json"];
+  const cases: [number, number, string][] = [
+    [request.estimate, 9.99, `--asked: the request's estimate ${request.estimate} is not the meta's 9.99`],
+    [0.5, request.estimate, `--asked: the request's estimate 0.5 is not the meta's ${request.estimate}`],
+    [-1, -1, "--asked: the request's estimate -1 is not an amount (a number, 0 or more); the meta's is -1"],
+  ];
+  for (const [asked, metaEstimate, want] of cases) {
+    writeFileSync(join(dir, "s6", "W01.request.json"), JSON.stringify({ ...request, estimate: asked }));
+    writeFileSync(join(dir, "s6", "W01.request.meta.json"), JSON.stringify({ ...meta, estimate: metaEstimate }));
+    const result = film("ledger", dir, E);
+    assert.equal(result.status, 2, `${asked}/${metaEstimate}: ${result.stdout}${result.stderr}`);
+    assert.deepEqual(lines(result.stdout), [want]);
+    assert.equal(existsSync(join(dir, "est", "ledger.jsonl")), false);
+  }
+  // A meta with no estimate is not a meta file.
+  const { estimate: _drop, ...bare } = meta;
+  writeFileSync(join(dir, "s6", "W01.request.json"), JSON.stringify(request));
+  writeFileSync(join(dir, "s6", "W01.request.meta.json"), JSON.stringify(bare));
+  const missing = film("ledger", dir, E);
+  assert.equal(missing.status, 2);
+  assert.deepEqual(lines(missing.stdout), ["--meta is not a request meta file"]);
+  // The two agreeing: recorded.
+  writeFileSync(join(dir, "s6", "W01.request.meta.json"), JSON.stringify(meta));
+  const ok = film("ledger", dir, E);
+  assert.equal(ok.status, 0, ok.stdout + ok.stderr);
+});
+
 test("a ledger reached through a linked folder inside --out is refused; nothing is written outside", () => {
   mkdirSync(join(dir, "outside"));
   mkdirSync(join(dir, "proj2"));

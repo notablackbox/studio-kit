@@ -46,9 +46,18 @@ function readRequest(requestPath: string, metaPath: string): Asked {
     typeof meta.provider !== "string" ||
     typeof meta.model !== "string" ||
     !Number.isInteger(meta.attempt) ||
-    meta.attempt < 1
+    meta.attempt < 1 ||
+    typeof meta.estimate !== "number"
   ) {
     throw new Refused(["--meta is not a request meta file"]);
+  }
+  // The estimate the row carries is the one film:request computed: an amount, and the meta's.
+  const asked = request.estimate as number;
+  if (!Number.isFinite(asked) || asked < 0) {
+    throw new Refused([`--asked: the request's estimate ${shown(asked)} is not an amount (a number, 0 or more); the meta's is ${shown(meta.estimate)}`]);
+  }
+  if (asked !== meta.estimate) {
+    throw new Refused([`--asked: the request's estimate ${shown(asked)} is not the meta's ${shown(meta.estimate)}`]);
   }
   if (idempotencyKey(meta.provider, meta.model, request.body, meta.attempt) !== request.idempotency_key) {
     throw new Refused([`--asked: the idempotency_key is not the key of the body, provider, model and attempt ${meta.attempt}`]);
