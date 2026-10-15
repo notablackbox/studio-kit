@@ -16,13 +16,15 @@ import { lyricLines, readBoard, type Board, type Shot } from "./lib/board.ts";
 //   windows     sung shots run 4 to 8 s and start in a word gap; motion shots run 4 to 12 s;
 //   plates      a plate on two shots only when they are one continuous moment; two clips
 //               never start from one plate;
-//   banned      no --taboo word (whole words, any case) in an action, prompt, type or notes;
+//   banned      no --taboo word (whole words, any case) in any string of the board;
 //   treatments  every 2.5D shot has a treatment, never the same on two 2.5D shots in a row;
-//   todo        no TODO, TBD or ??? anywhere; every shot has a framing and a tier; a clip shot
-//               names its clip and a 2.5D shot its plate;
-//   genuine     a genuine shot's clip or footage is recorded in walk-report.json or
-//               recordings.json (deferred with --defer provenance);
-//   hook        every --hooks entry is a masthead or mass card at least once;
+//   todo        no TODO or TBD (any case) or ??? anywhere; every shot has a framing and a
+//               tier; a clip shot names its clip and a 2.5D shot its plate;
+//   genuine     a genuine shot names its clip or footage, and it is recorded in
+//               walk-report.json or recordings.json (only that is deferred with --defer
+//               provenance);
+//   hook        every --hooks entry is a masthead or mass card at least once (or, written in
+//               " / " parts, a stack of its parts);
 //   box         two chapters in a row are never in the same box.
 // Exit 3 with one line per failing gate; the report lists every gate.
 
@@ -33,7 +35,8 @@ const TILE_EPS = 0.001;
 const SUNG = [4, 8];
 const MOTION = [4, 12];
 const LEAD_WARN = 0.85;
-const PLACEHOLDER = /TODO|TBD|\?\?\?/;
+// Any case, as whole words (so "mastodon" is not a placeholder); "???" anywhere.
+const PLACEHOLDER = /(?<![\p{L}\p{N}])(?:todo|tbd)(?![\p{L}\p{N}])|\?\?\?/iu;
 const GATES = ["tile", "cuts", "sections", "words", "graphics", "lead", "budget", "windows", "plates", "banned", "treatments", "todo", "genuine", "hook", "box"] as const;
 
 type GateName = (typeof GATES)[number];
@@ -56,6 +59,8 @@ const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "obj
 const isNumber = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const q = (id: string) => shown(id);
 const norm = (text: string) => text.trim().replace(/\s+/g, " ").toLowerCase();
+// A hook or a card's text compared: any case, punctuation dropped, spaces folded.
+const bare = (text: string) => norm(text.replace(/[^\p{L}\p{N}\s]/gu, " "));
 const isClipShot = (s: Shot) => s.motion_tier === "sung" || s.motion_tier === "motion";
 
 function readJson(file: string, flag: string, what: string): unknown {
@@ -342,33 +347,25 @@ export function auditBoard(board: Board, analysis: Analysis, options: Options): 
     const problems: string[] = [];
     const ids: string[] = [];
     const patterns = options.taboo.map((word) => ({ word, re: new RegExp(`(?<![\\p{L}\\p{N}])${word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}])`, "iu") }));
-    const scan = (where: string, text: string | undefined, id: string | null) => {
-      if (!text) return;
-      for (const { word, re } of patterns) {
-        if (re.test(text)) {
-          problems.push(`${where} has ${shown(word)}`);
-          if (id) ids.push(id);
+    // Every string in the board, reported once per word and top-level field of a shot, a
+    // chapter or a plate.
+    const strings = (value: unknown): string[] =>
+      typeof value === "string" ? [value] : Array.isArray(value) ? value.flatMap(strings) : isObject(value) ? Object.values(value).flatMap(strings) : [];
+    const scan = (where: string, entry: object, id: string | null) => {
+      for (const [field, value] of Object.entries(entry)) {
+        const texts = strings(value);
+        for (const { word, re } of patterns) {
+          if (texts.some((t) => re.test(t))) {
+            problems.push(`${where}${id ? " " : "."}${field} has ${shown(word)}`);
+            if (id) ids.push(id);
+          }
         }
       }
     };
     if (patterns.length > 0) {
-      for (const shot of shots) {
-        const found = new Set<string>();
-        const scanShot = (field: string, texts: (string | undefined)[]) => {
-          for (const { word, re } of patterns) {
-            if (!found.has(`${field}\0${word}`) && texts.some((t) => t !== undefined && re.test(t))) {
-              found.add(`${field}\0${word}`);
-              problems.push(`${q(shot.id)} ${field} has ${shown(word)}`);
-              ids.push(shot.id);
-            }
-          }
-        };
-        scanShot("action", [shot.action]);
-        scanShot("prompt", [shot.prompt]);
-        scanShot("type", shot.type.map((t) => t.text));
-        scanShot("notes", [shot.notes]);
-      }
-      board.plates.forEach((plate, n) => scan(`plates[${n}].prompt`, plate.prompt, null));
+      for (const shot of shots) scan(q(shot.id), shot, shot.id);
+      board.chapters.forEach((chapter, n) => scan(`chapters[${n}]`, chapter, null));
+      board.plates.forEach((plate, n) => scan(`plates[${n}]`, plate, null));
     }
     add("banned", problems, ids, {}, undefined);
   }
@@ -432,29 +429,46 @@ export function auditBoard(board: Board, analysis: Analysis, options: Options): 
   {
     const problems: string[] = [];
     const ids: string[] = [];
+    const deferred: string[] = [];
+    const deferredIds: string[] = [];
     const genuine = shots.filter((s) => s.genuine);
     const known = options.provenance;
-    const recorded = (name: string) => known !== null && [...known].some((f) => f === name || basename(f) === basename(name));
+    // Footage matches a recorded file by name or base name; a clip id matches a file's stem.
+    const stem = (file: string) => basename(file).replace(/\.[^.]*$/, "");
+    const footageRecorded = (name: string) => known !== null && [...known].some((f) => f === name || basename(f) === basename(name));
+    const clipRecorded = (id: string) => known !== null && [...known].some((f) => stem(f) === id);
+    // Naming nothing is a board problem and fails even under --defer provenance; only "not
+    // recorded (yet)" is deferred.
     for (const shot of genuine) {
-      const names = [shot.footage, shot.clip].filter((n): n is string => typeof n === "string" && n !== "");
-      if (names.length === 0) {
+      if (!shot.footage && !shot.clip) {
         problems.push(`${q(shot.id)} is genuine and names no clip or footage`);
         ids.push(shot.id);
-      } else if (!names.some(recorded)) {
+      } else if (!(shot.footage && footageRecorded(shot.footage)) && !(shot.clip && clipRecorded(shot.clip))) {
         const what = shot.footage ? `footage ${shown(shot.footage)}` : `clip ${shown(shot.clip)}`;
-        problems.push(`${q(shot.id)} ${what} is not in walk-report.json or recordings.json${known === null ? " (none given)" : ""}`);
-        ids.push(shot.id);
+        deferred.push(`${q(shot.id)} ${what} is not in walk-report.json or recordings.json${known === null ? " (none given)" : ""}`);
+        deferredIds.push(shot.id);
       }
     }
-    if (options.deferProvenance) add("genuine", problems, genuine.map((s) => s.id), {}, "deferred");
-    else add("genuine", problems, ids);
+    if (!options.deferProvenance) add("genuine", [...problems, ...deferred], [...ids, ...deferredIds]);
+    else if (problems.length > 0) add("genuine", problems, ids, { deferred });
+    else add("genuine", [], deferredIds, { deferred }, "deferred");
   }
 
   // hook
   {
     const problems: string[] = [];
-    const cards = new Set(shots.flatMap((s) => s.type.filter((t) => t.mode === "masthead" || t.mode === "mass").map((t) => norm(t.text))));
-    for (const hook of options.hooks) if (!cards.has(norm(hook))) problems.push(`${shown(hook.trim())} is on no masthead or mass card`);
+    // A hook is full-frame when one masthead or mass card has its whole text; a hook written
+    // with " / " also matches a stack card whose lines (newlines or " / ") are its parts in order.
+    const cards = new Set(shots.flatMap((s) => s.type.filter((t) => t.mode === "masthead" || t.mode === "mass").map((t) => bare(t.text))));
+    const stacks = new Set(
+      shots.flatMap((s) => s.type.filter((t) => t.mode === "stack").map((t) => t.text.split(/\n|\s\/\s/).map(bare).filter((l) => l !== "").join("\n"))),
+    );
+    for (const hook of options.hooks) {
+      const parts = hook.split(/\s\/\s/).map(bare).filter((l) => l !== "");
+      const whole = cards.has(bare(hook));
+      const stacked = parts.length > 1 && stacks.has(parts.join("\n"));
+      if (!whole && !stacked) problems.push(`${shown(hook.trim())} is on no masthead or mass card${parts.length > 1 ? " and no stack of its parts" : ""}`);
+    }
     add("hook", problems, []);
   }
 

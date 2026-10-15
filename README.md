@@ -550,11 +550,11 @@ summary and the warnings. Any failing gate is exit 3, one line per gate:
 | `budget` | the sung and motion shots' seconds over `--motion-seconds`, or their clips over `--motion-clips`; `skipped` with neither flag |
 | `windows` | a sung shot outside 4 to 8 s or starting inside a word (it must start in a word gap: in `words.json`'s `gaps`, or between words); a motion shot outside 4 to 12 s |
 | `plates` | one plate on two shots that are not next to each other; two clips starting from one plate |
-| `banned` | a `--taboo` word (whole words, any case) in a shot's `action`, `prompt`, `type` text or `notes`, or a plate's prompt |
+| `banned` | a `--taboo` word (whole words, any case) in any string of the board: every field of a shot (set, camera, chrome, section, type, devices...), a chapter or a plate; one problem per word and field |
 | `treatments` | a 2.5D (`plate3d`) shot without a treatment, or two 2.5D shots in a row with the same one |
-| `todo` | `TODO`, `TBD` or `???` anywhere in the board; a shot with no framing or tier; a sung or motion shot with no clip; a 2.5D shot with no plate |
-| `genuine` | a `genuine` shot whose `footage` or `clip` is not a recorded shot of `--walk-report` (`shots[].file` with `status: recorded`) or an entry of `--recordings` (`recordings[].file`), matched by name; `deferred` with `--defer provenance` (the board step defers it, the build enforces it) |
-| `hook` | a `--hooks` entry (pipe-separated) that no shot types as a `masthead` or `mass` card (any case, spaces folded) |
+| `todo` | `TODO` or `TBD` (any case, whole words) or `???` anywhere in the board; a shot with no framing or tier; a sung or motion shot with no clip; a 2.5D shot with no plate |
+| `genuine` | a `genuine` shot whose `footage` or `clip` is not a recorded shot of `--walk-report` (`shots[].file` with `status: recorded`) or an entry of `--recordings` (`recordings[].file`): footage by name or base name, a clip id by a file's stem; `deferred` with `--defer provenance` (the board step defers it, the build enforces it). A genuine shot naming no clip or footage fails even then |
+| `hook` | a `--hooks` entry (pipe-separated) that no shot types as a `masthead` or `mass` card with its whole text (any case, punctuation dropped, spaces folded); a hook written in parts with ` / ` also passes as a `stack` card whose lines (newlines or ` / `) are its parts in order |
 | `box` | two chapters in a row in the same `box` |
 
 It warns, without failing, when her share is over 85 percent, when two shots in
@@ -573,7 +573,7 @@ plate (`<plates>/<plate>.png`, `.jpg` or `.jpeg`, embedded) or, where the plate
 does not exist yet, a prompt card (the prompt's first 220 characters on the
 shot's accent, else its chapter's); the id and time; the section and lines;
 the framing and tier; the action in one line; the first device in one line;
-and a `FACE?` badge when the shot's notes mention a face. Fonts are the kit's
+and a `FACE?` badge when the shot's notes have the word "face" (or "faces"). Fonts are the kit's
 own (Anton, Inter, IBM Plex Mono), embedded. The page count is read back from
 the PDF and must be the cover plus one page per twelve cards.
 
@@ -592,18 +592,23 @@ share and the feather in pixels.
 
 `film:edl` writes `edl.json`, keyed by shot id (wiki/formats, "The edit
 list"). A sung or motion shot plays its clip's delivered take (`<clips>/<clip>.json`,
-the take with `status: delivered` and the highest `n`) from the shot's start:
-`{segs: [{t0, clip: "<clip>-t<n>", in}]}` with `in = t0 - song_t0 + lag_s`
-(lag 0 when the take has no `sync`). A sung take whose shot runs past its
-`sync.synced` spans is cut at its `sync.cut_at` to its first cover, which plays
-from there by its own `song_t0` and lag, down the chain. A still or 2.5D shot
-is `{plate}`. A hole is filled from the shot's plate and noted in the report
-(`fallbacks`, and a `fallback: ...` line on stdout): a clip or cover with no
-delivered take (or no file) is `no take`, a sung take that diverges with no
-cover is `no cover`; a clip with nothing delivered makes the whole shot
-`{plate}`. A shot left with neither a take nor a plate (including a pure
-motion-design shot with `plate: null`) fails: exit 3, one line each, the report
-written and no `edl.json`. The report also gives, per sung shot, its sung
+the take with `status: delivered`, a `file`, and the highest `n`) from the
+shot's start: `{segs: [{t0, clip: "<clip>-t<n>", in}]}` with
+`in = t0 - song_t0 + lag_s` (lag 0 when the take has no `sync`). A sung take
+whose shot runs past its `sync.synced` spans is cut at its `sync.cut_at` to its
+first cover, which plays from there by its own `song_t0` and lag, down the
+chain. A `genuine` shot with `footage` is `{footage: "<file>"}` (the file the
+walk or a terminal capture recorded; the chapter engine plays it like a clip);
+a genuine shot without footage resolves as any other. A still or 2.5D shot is
+`{plate}`, or `{design: true}` with `plate: null` (pure motion design). A hole
+is filled from the shot's plate and noted in the report (`fallbacks`, and a
+`fallback: ...` line on stdout): a clip or cover with no delivered take, a
+delivered take with no `file`, or no clip file is `no take`; a sung take that
+diverges with no cover is `no cover`; a take whose `cut_at` is at or before its
+segment's start is `out of sync`; a clip with nothing usable makes the whole
+shot `{plate}`. A sung or motion shot left with neither a take nor a plate
+fails: exit 3, one line each, the report written and no `edl.json`. The summary
+line counts the shots from takes, plates, footage and design. The report also gives, per sung shot, its sung
 seconds (each word of `--words` padded 30 ms, merged under 0.12 s) and how many
 of them the in-sync spans cover. A clip file that does not parse, or whose `id`
 is not its file name, is refused.
@@ -806,7 +811,7 @@ and `model depth is not in "/opt/models" (run ...)`.
 Exit `3`, with the report written: `film:words`, the check's line and the words
 off, as in [Listening](#listening-filmstems-filmbeats-filmwords-filmhits-filmwindow),
 with `words.json` written too; `film:audit`, one `gate <name>: ...` line per
-failing gate; `film:edl`, one `edl: "s003" has neither a take nor a plate` line
+failing gate; `film:edl`, one `edl: "s004" has neither a take nor a plate (clip "W09" has no delivered take)` line
 per shot, and no `edl.json`.
 
 Exit `1`, on stderr: `walk: the session file could not be removed`,

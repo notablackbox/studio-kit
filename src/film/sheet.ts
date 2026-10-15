@@ -65,7 +65,7 @@ function cover(board: Board, title: string): string {
 }
 
 function card(shot: Shot, image: string | null, accent: string): string {
-  const face = /face/i.test(shot.notes ?? "") ? `<span class="badge">FACE?</span>` : "";
+  const face = /\bfaces?\b/i.test(shot.notes ?? "") ? `<span class="badge">FACE?</span>` : "";
   const frame = image
     ? `<div class="frame"><img src="${image}" alt="">${face}</div>`
     : `<div class="frame prompt" style="background:${accent}">${escape(clipped(shot.prompt ?? "(no prompt yet)", PROMPT_CHARS))}${face}</div>`;
@@ -163,7 +163,7 @@ async function main(): Promise<number> {
     const image = plateImage(plates, shot.plate);
     if (image && shot.plate) found.add(shot.plate);
     else promptCards.push(shot.id);
-    if (/face/i.test(shot.notes ?? "")) faces.push(shot.id);
+    if (/\bfaces?\b/i.test(shot.notes ?? "")) faces.push(shot.id);
     return card(shot, image?.url ?? null, shot.accent ?? chapterOf(shot)?.accent ?? DEFAULT_ACCENT);
   });
   const title = "storyboard";

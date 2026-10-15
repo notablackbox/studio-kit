@@ -131,6 +131,18 @@ test("cuts: a cut off the beat fails; on a hit from hits.json or a declared hit 
     shot("s002").hit = 0.9;
   });
   assert.equal(audit(declared, "cuts2").status, 0);
+
+  // The edge: 0.031 s off fails, 0.029 s passes.
+  const edge = changedBoard(dir, "cuts3.json", (_b, shot) => {
+    shot("s003").t1 = 6.431;
+    shot("s004").t0 = 6.431;
+  });
+  assert.equal(failsOnly("cuts", edge, "cuts3", ["s004"]), 'gate cuts: the cut at 6.431 s into "s004" is 0.031 s from the nearest beat');
+  const inside = changedBoard(dir, "cuts4.json", (_b, shot) => {
+    shot("s003").t1 = 6.433;
+    shot("s004").t0 = 6.433;
+  });
+  assert.equal(audit(inside, "cuts4").status, 0);
 });
 
 test("sections: a section the beat map does not have fails", () => {
@@ -230,9 +242,13 @@ test("banned: a --taboo word, as a whole word, in the action, prompt, type or no
   assert.equal(audit("shots.json", "banned2", ["--taboo", "lamp"], FLAGS.slice(0, 6)).status, 0);
   const typed = failsOnly("banned", "shots.json", "banned3", ["s001", "s002"], ["--taboo", "WAKES"], FLAGS.slice(0, 4));
   assert.equal(typed, 'gate banned: "s001" type has "WAKES"; "s002" type has "WAKES"');
-  // The prompts count, the board's plate prompts included.
+  // Every string in the board counts: sets, prompts, the plates' and the chapters' fields.
   const prompt = failsOnly("banned", "shots.json", "banned4", ["s002"], ["--taboo", "doorway"], FLAGS.slice(0, 4));
-  assert.equal(prompt, 'gate banned: "s002" prompt has "doorway"; plates[1].prompt has "doorway"');
+  assert.equal(prompt, 'gate banned: "s002" set has "doorway"; "s002" prompt has "doorway"; plates[1].set has "doorway"; plates[1].prompt has "doorway"');
+  const set = failsOnly("banned", "shots.json", "banned5", ["s002"], ["--taboo", "buzzer"], FLAGS.slice(0, 4));
+  assert.equal(set, 'gate banned: "s002" set has "buzzer"');
+  const chapter = failsOnly("banned", "shots.json", "banned6", [], ["--taboo", "wake"], FLAGS.slice(0, 4));
+  assert.equal(chapter, 'gate banned: chapters[0].name has "wake"');
 });
 
 test("treatments: two 2.5D shots in a row with one treatment, or a 2.5D shot without one, fail", () => {
@@ -258,6 +274,13 @@ test("todo: a placeholder anywhere, or a shot without a framing, fails", () => {
   });
   const line = failsOnly("todo", board, "todo", ["s001", "s002", "s003"]);
   assert.equal(line, 'gate todo: "s001" has no framing; "s002" camera has "???"; "s003" action has "TODO"; chapters[1].name has "TBD"');
+
+  // Any case, whole words: "todo" is a placeholder, "mastodon" is not.
+  const lower = changedBoard(dir, "todo2.json", (_b, shot) => {
+    shot("s003").action = "todo: the dashboard";
+    shot("s004").notes = "a mastodon on the water tank";
+  });
+  assert.equal(failsOnly("todo", lower, "todo2", ["s003"]), 'gate todo: "s003" action has "todo"');
 });
 
 test("genuine: footage not recorded fails; --recordings counts; --defer provenance defers", () => {
@@ -287,14 +310,36 @@ test("genuine: footage not recorded fails; --recordings counts; --defer provenan
   assert.deepEqual(gate(report("genuine5"), "genuine").shots, ["s003"]);
   assert.match(lines(deferred.stdout)[0], /^audit: 15 gates, all pass \(1 deferred\): /);
   assert.deepEqual(report("genuine5").inputs.defer, ["provenance"]);
+
+  // --defer provenance never defers a genuine shot that names nothing.
+  const unnamed = failsOnly("genuine", nothing, "genuine6", ["s003"], ["--defer", "provenance"], FLAGS.slice(2));
+  assert.equal(unnamed, 'gate genuine: "s003" is genuine and names no clip or footage');
+
+  // A clip id matches a recorded file's stem.
+  const byClip = changedBoard(dir, "genuine7.json", (_b, shot) => {
+    Object.assign(shot("s003"), { footage: null, clip: "shot-01" });
+  });
+  assert.equal(audit(byClip, "genuine7").status, 0);
+  const notRecordedClip = changedBoard(dir, "genuine8.json", (_b, shot) => {
+    Object.assign(shot("s003"), { footage: null, clip: "shot-02" });
+  });
+  assert.equal(failsOnly("genuine", notRecordedClip, "genuine8", ["s003"]), 'gate genuine: "s003" clip "shot-02" is not in walk-report.json or recordings.json');
 });
 
 test("hook: each --hooks entry must be a masthead or mass card somewhere", () => {
   const flags = [...FLAGS.slice(0, 2), ...FLAGS.slice(4)];
   const line = failsOnly("hook", "shots.json", "hook", [], ["--hooks", "THE CITY WAKES|NOT A FOX|We count the windows."], flags);
   assert.equal(line, 'gate hook: "NOT A FOX" is on no masthead or mass card; "We count the windows." is on no masthead or mass card');
-  // Case and spacing do not matter.
-  assert.equal(audit("shots.json", "hook2", ["--hooks", "  the   city WAKES |hold the LIGHT"], flags).status, 0);
+  // Case, spacing and punctuation do not matter.
+  assert.equal(audit("shots.json", "hook2", ["--hooks", "  the   city WAKES |hold, the LIGHT!"], flags).status, 0);
+  // A hook in parts (" / ") is one card with the whole text, or a stack of its parts in order.
+  const stacked = changedBoard(dir, "hook3.json", (_b, shot) => {
+    (shot("s005").type as unknown[]).push({ line: null, mode: "stack", text: "NOT A CAT\nNOT IN A BOX." });
+    (shot("s001").type as unknown[]).push({ line: null, mode: "mass", text: "Velocity. Is. The moat" });
+  });
+  assert.equal(audit(stacked, "hook3", ["--hooks", "not a cat / not in a box|VELOCITY IS THE MOAT"], flags).status, 0);
+  const wrongOrder = failsOnly("hook", stacked, "hook4", [], ["--hooks", "NOT IN A BOX / NOT A CAT"], flags);
+  assert.equal(wrongOrder, 'gate hook: "NOT IN A BOX / NOT A CAT" is on no masthead or mass card and no stack of its parts');
 });
 
 test("box: two chapters in a row in the same box fail", () => {

@@ -75,6 +75,8 @@ test("twelve cards a page: thirteen shots make a cover and two pages; text is es
       t1: n + 1,
       plate: n === 0 ? "p-dawn" : `p-${n}`,
       action: n === 1 ? "<script>alert(1)</script> & more" : String(first.action),
+      // FACE? on the word only: "surface" is no face.
+      notes: n === 2 ? "the surface is wet" : n === 3 ? "Face: off-model?" : "",
     }));
     b.duration = 13;
   });
@@ -84,6 +86,7 @@ test("twelve cards a page: thirteen shots make a cover and two pages; text is es
   const report = JSON.parse(readFileSync(join(dir, "thirteen", "sheet-report.json"), "utf8"));
   assert.equal(report.pages, 3);
   assert.equal(report.prompt_cards.length, 12);
+  assert.deepEqual(report.face_flags, ["s004"]);
   const html = readFileSync(join(dir, "thirteen", "sheet.html"), "utf8");
   assert.ok(html.includes("&lt;script&gt;alert(1)&lt;/script&gt; &amp; more"));
   assert.doesNotMatch(html, /<script/);

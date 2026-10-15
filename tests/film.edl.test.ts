@@ -28,7 +28,7 @@ test("the fixture board: one sung shot cut to its cover, one sung shot straight,
   const result = film("edl", dir, ARGS("shots.json", "clips", "edl"));
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.equal(result.stderr, "");
-  assert.deepEqual(lines(result.stdout), ["edl: 5 shots, 2 from takes (3 segments), 3 from plates, 0 fallbacks"]);
+  assert.deepEqual(lines(result.stdout), ["edl: 5 shots, 2 from takes (3 segments), 2 from plates, 1 from footage, 0 design, 0 fallbacks"]);
   assert.deepEqual(read("edl"), {
     s001: { plate: "p-dawn" },
     // W01's take 2 (take 1 failed): in = 0.976 - 0.976 + 0.31; it diverges, so at its cut
@@ -39,7 +39,8 @@ test("the fixture board: one sung shot cut to its cover, one sung shot straight,
         { t0: 3.987, clip: "W01-c1-t1", in: 0.217 },
       ],
     },
-    s003: { plate: "p-window" },
+    // Genuine: the recorded footage, played like a clip.
+    s003: { footage: "shot-01.webm" },
     // W02's take has no sync: lag 0.
     s004: { segs: [{ t0: 6.462, clip: "W02-t1", in: 0 }] },
     s005: { plate: "p-roof" },
@@ -67,7 +68,7 @@ test("a clip with no delivered take, or no clip file, falls back to the plate wi
   const result = film("edl", dir, ARGS("shots.json", clips, "pending"));
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.deepEqual(lines(result.stdout), [
-    "edl: 5 shots, 1 from takes (2 segments), 4 from plates, 2 fallbacks",
+    "edl: 5 shots, 1 from takes (2 segments), 3 from plates, 1 from footage, 0 design, 2 fallbacks",
     'fallback: "s002" plays plate "p-street" from 3.987 s: clip "W01-c1" has no delivered take',
     'fallback: "s004" plays plate "p-roof" from 6.462 s: clip "W02" has no delivered take',
   ]);
@@ -81,21 +82,61 @@ test("a clip with no delivered take, or no clip file, falls back to the plate wi
   ]);
 });
 
-test("a shot with neither a take nor a plate fails: exit 3, one line each, the report written", () => {
+test("a still or 2.5D shot with no plate is pure motion design; a genuine shot without footage plays its plate", () => {
+  const board = changedBoard(dir, "design.json", (_b, shot) => {
+    shot("s001").plate = null;
+    Object.assign(shot("s005"), { plate: null });
+    shot("s003").footage = null;
+  });
+  const result = film("edl", dir, ARGS(board, "clips", "design"));
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.deepEqual(lines(result.stdout), ["edl: 5 shots, 2 from takes (3 segments), 1 from plates, 0 from footage, 2 design, 0 fallbacks"]);
+  const edl = read("design");
+  assert.deepEqual(edl.s001, { design: true });
+  assert.deepEqual(edl.s005, { design: true });
+  assert.deepEqual(edl.s003, { plate: "p-window" });
+});
+
+test("a sung or motion shot with neither a take nor a plate fails: exit 3, one line each, the report written", () => {
   const board = changedBoard(dir, "noplate.json", (_b, shot) => {
-    shot("s003").plate = null;
+    Object.assign(shot("s002"), { plate: null, clip: "W08", motion_tier: "motion" });
     Object.assign(shot("s004"), { plate: null, clip: "W09" });
   });
   const result = film("edl", dir, ARGS(board, "clips", "noplate"));
   assert.equal(result.status, 3, result.stdout + result.stderr);
   assert.deepEqual(lines(result.stdout), [
-    'edl: "s003" has neither a take nor a plate',
+    'edl: "s002" has neither a take nor a plate (clip "W08" has no delivered take)',
     'edl: "s004" has neither a take nor a plate (clip "W09" has no delivered take)',
   ]);
   const r = report("noplate");
   assert.equal(r.ok, false);
-  assert.deepEqual(r.missing, ["s003", "s004"]);
+  assert.deepEqual(r.missing, ["s002", "s004"]);
   assert.equal(existsSync(join(dir, "noplate", "edl.json")), false);
+});
+
+test("a delivered take with no file is no take; a take out of sync from its start falls back to the plate", () => {
+  const clips = clipsCopy("clips-odd", (folder) => {
+    const w02 = JSON.parse(readFileSync(join(folder, "W02.json"), "utf8"));
+    delete w02.takes[0].file;
+    writeFileSync(join(folder, "W02.json"), JSON.stringify(w02));
+    const w01 = JSON.parse(readFileSync(join(folder, "W01.json"), "utf8"));
+    w01.takes[1].sync.cut_at = 0.95;
+    writeFileSync(join(folder, "W01.json"), JSON.stringify(w01));
+  });
+  const result = film("edl", dir, ARGS("shots.json", clips, "odd"));
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.deepEqual(lines(result.stdout), [
+    "edl: 5 shots, 0 from takes (0 segments), 4 from plates, 1 from footage, 0 design, 2 fallbacks",
+    'fallback: "s002" plays plate "p-street" from 0.976 s: clip "W01" is out of sync from its start',
+    'fallback: "s004" plays plate "p-roof" from 6.462 s: clip "W02" has no delivered take',
+  ]);
+  const edl = read("odd");
+  assert.deepEqual(edl.s002, { plate: "p-street" });
+  assert.deepEqual(edl.s004, { plate: "p-roof" });
+  assert.deepEqual(report("odd").fallbacks, [
+    { shot: "s002", clip: "W01", at: 0.976, fallback: "out of sync", plate: "p-street" },
+    { shot: "s004", clip: "W02", at: 6.462, fallback: "no take", plate: "p-roof" },
+  ]);
 });
 
 test("refusals: one line each on stdout, exit 2, nothing written", () => {
