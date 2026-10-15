@@ -114,6 +114,29 @@ test("the window with 0.3 s of silence before it: lag 0.3", () => {
   assert.match(lines(result.stdout)[0], /lag 0\.30 s/);
 });
 
+test("a take that starts 0.3 s into the window: lag -0.3, the curve starts where the take does", () => {
+  const take = window.slice(Math.round(0.3 * 44100));
+  const result = film("sync", dir, SYNC(writeWav("early.wav", take), "early"));
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const r = report("early");
+  assert.ok(Math.abs(r.sync.lag_s + 0.3) <= 0.01, `lag ${r.sync.lag_s}`);
+  assert.ok(r.sync.ncc > 0.95);
+  // The first measured window is the window's 0.3 s mark, in song time.
+  assert.ok(Math.abs(r.curve.t0 - (t0 + 0.3)) <= 0.011, `curve t0 ${r.curve.t0}, want ${(t0 + 0.3).toFixed(4)}`);
+  assert.equal(r.sync.diverge_at, null);
+});
+
+test("a take shorter than the window: the missing tail diverges from the take's end", () => {
+  const take = window.slice(0, Math.round(3.0 * 44100));
+  const result = film("sync", dir, SYNC(writeWav("short.wav", take), "short"));
+  const r = report("short");
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(r.sync.mode, "copy");
+  assert.ok(Math.abs(r.sync.diverge_at - (t0 + 3.0)) <= 0.011, `diverge_at ${r.sync.diverge_at}, want ${(t0 + 3).toFixed(4)}`);
+  assert.ok(r.sync.cut_at <= r.sync.diverge_at && eighths.some((e) => Math.abs(e - r.sync.cut_at) < 1e-3));
+  assert.ok(r.sync.synced.every(([, b]: [number, number]) => b <= r.sync.diverge_at + 1e-6), JSON.stringify(r.sync.synced));
+});
+
 test("the window with white noise after 2 s: it diverges at about 2.0, cut on an eighth before it", () => {
   const take = Float64Array.from(window);
   const at = Math.round(2.0 * 44100);

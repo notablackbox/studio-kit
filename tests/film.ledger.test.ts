@@ -4,6 +4,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync
 import { join } from "node:path";
 import { film, kitRoot, lines } from "./fixtures/film.ts";
 import { boardDir } from "./fixtures/board.ts";
+import { keyOf } from "./fixtures/requests.ts";
 
 // film:ledger appends one row per call to ledger.jsonl (asked, polled, delivered, declined,
 // failed) and never rewrites it; --check prints a reference's state. A decline closes the
@@ -63,7 +64,7 @@ test("asked, polled, delivered: one row each, appended, the asked row's facts ca
 
   const report = JSON.parse(readFileSync(join(dir, "proj", "ledger-report.json"), "utf8"));
   assert.equal(report.ok, true);
-  assert.deepEqual(report.inputs, { ledger: join(dir, "proj", "ledger.jsonl"), action: "delivered", key, file: "take.mp4", figures: { usage: { cost: 1.155 } }, reason: null });
+  assert.deepEqual(report.inputs, { ledger: join(dir, "proj", "ledger.jsonl"), action: "delivered", key, meta: null, file: "take.mp4", figures: { usage: { cost: 1.155 } }, reason: null });
   assert.deepEqual(report.outputs, { ledger: "ledger.jsonl", report: "ledger-report.json" });
   assert.deepEqual(report.row, rows[2]);
   assert.equal(report.state.attempts, 1);
@@ -127,6 +128,15 @@ test("refusals: one line each, exit 2, the ledger left as it was", () => {
     [L("--asked", "notreq.json"), "--asked is not a request file"],
     [L("--asked", "missing.json"), "--asked cannot be read"],
     [L("--asked", "req/W01.request.json", "--figures", "{}"), "--figures and --reason go with the rows after asked"],
+    [L("--asked", "req/W01.request.json", "--meta", "nope.json"), "--meta cannot be read"],
+    [L("--asked", "req/W01.request.json", "--meta", "notreq.json"), "--meta is not a request meta file"],
+    [L("--polled", key, "--meta", "req/W01.request.meta.json"), "--meta goes with --asked only"],
+    // A declined reference is terminal: no row but its own after the decline.
+    [L("--polled", motionKey), '--polled: "M01" was declined on higgsfield: the reference is closed'],
+    [L("--delivered", motionKey, "--file", "take.mp4"), '--delivered: "M01" was declined on higgsfield: the reference is closed'],
+    [L("--failed", motionKey, "--reason", "late"), '--failed: "M01" was declined on higgsfield: the reference is closed'],
+    // A delivered key cannot then be declined.
+    [L("--declined", key, "--reason", "face filter"), `--declined: key "${key}" is already delivered`],
     [["--ledger", "elsewhere/ledger.jsonl", "--out", "proj", "--polled", key], "--ledger must be inside --out (the ledger is appended to)"],
     [["--ledger", "afile/ledger.jsonl", "--out", "afile", "--polled", key], "--out is not a folder"],
   ];
@@ -138,23 +148,37 @@ test("refusals: one line each, exit 2, the ledger left as it was", () => {
   }
   assert.equal(existsSync(join(dir, "elsewhere")), false);
 
-  // A stale request (shaped before another attempt was asked) is refused: its attempt is taken.
-  const stale = film("request", dir, ["--clip", "clips/W01.json", "--provider", "higgsfield", "--ledger", "proj/ledger.jsonl", "--out", "stale", "--start-artifact", "a1", "--window-artifact", "a2"]);
-  assert.equal(stale.status, 0);
-  const staleRequest = JSON.parse(readFileSync(join(dir, "stale", "W01.request.json"), "utf8"));
-  staleRequest.kit.attempt = 1;
-  staleRequest.idempotency_key = "f".repeat(64);
-  writeFileSync(join(dir, "stale", "old.request.json"), JSON.stringify(staleRequest));
-  const old = film("ledger", dir, L("--asked", "stale/old.request.json"));
+  // A stale request: two requests shaped for attempt 1, on two providers; once one is asked,
+  // the other's attempt is taken.
+  const shape = (provider: string, out: string) =>
+    film("request", dir, ["--clip", "clips/W01.json", "--provider", provider, "--ledger", "fresh/ledger.jsonl", "--out", out, "--start-artifact", "a1", "--window-artifact", "a2"]);
+  assert.equal(shape("openrouter", "s1").status, 0);
+  assert.equal(shape("higgsfield", "s2").status, 0);
+  const F = (...action: string[]) => ["--ledger", "fresh/ledger.jsonl", "--out", "fresh", ...action];
+  assert.equal(film("ledger", dir, F("--asked", "s1/W01.request.json")).status, 0);
+  const old = film("ledger", dir, F("--asked", "s2/W01.request.json"));
   assert.equal(old.status, 2);
   assert.deepEqual(lines(old.stdout), ['--asked: "W01" attempt 1 is stale, the ledger holds 1 asked: shape the request again']);
 
-  // A request for a declined reference is refused too.
-  const m = JSON.parse(readFileSync(join(dir, "req", "M01.request.json"), "utf8"));
-  m.kit.attempt = 2;
-  m.idempotency_key = "e".repeat(64);
-  writeFileSync(join(dir, "stale", "m.request.json"), JSON.stringify(m));
-  const closed = film("ledger", dir, L("--asked", "stale/m.request.json"));
+  // The key is recomputed from the request and the meta's attempt: a meta that does not
+  // match its request is refused.
+  mkdirSync(join(dir, "s3"));
+  cpSync(join(dir, "s2", "W01.request.json"), join(dir, "s3", "W01.request.json"));
+  const meta = JSON.parse(readFileSync(join(dir, "s2", "W01.request.meta.json"), "utf8"));
+  meta.attempt = 2;
+  writeFileSync(join(dir, "s3", "W01.request.meta.json"), JSON.stringify(meta));
+  const mismatch = film("ledger", dir, F("--asked", "s3/W01.request.json"));
+  assert.equal(mismatch.status, 2);
+  assert.deepEqual(lines(mismatch.stdout), ['--asked: the idempotency_key is not the key of the body, provider, model and attempt 2']);
+
+  // A request for a declined reference is refused too, its key right for attempt 2.
+  const request = JSON.parse(readFileSync(join(dir, "req", "M01.request.json"), "utf8"));
+  const mMeta = JSON.parse(readFileSync(join(dir, "req", "M01.request.meta.json"), "utf8"));
+  mMeta.attempt = 2;
+  request.idempotency_key = mMeta.idempotency_key = keyOf("higgsfield", "bytedance/seedance-2.5", request.body, 2);
+  writeFileSync(join(dir, "s3", "M01.request.json"), JSON.stringify(request));
+  writeFileSync(join(dir, "s3", "M01.request.meta.json"), JSON.stringify(mMeta));
+  const closed = film("ledger", dir, L("--asked", "s3/M01.request.json"));
   assert.equal(closed.status, 2);
   assert.deepEqual(lines(closed.stdout), ['--asked: "M01" was declined on higgsfield: no request for it on any provider']);
 

@@ -8,28 +8,28 @@
       {
         "role": "user",
         "content": [
-          { "type": "text", "text": "medium shot of an adult performer at a rooftop parapet at dawn, the same face, hair and wardrobe as the reference, soft blue light, the city below out of focus, the lower third of the frame dark and empty, no text, no letters, no logos" },
-          { "type": "image_url", "image_url": { "url": "{{artifact:art-lead-front}}" } }
+          {
+            "type": "text",
+            "text": "medium shot of an adult performer at a rooftop parapet at dawn, the same face, hair and wardrobe as the reference, soft blue light, the city below out of focus, the lower third of the frame dark and empty, no text, no letters, no logos"
+          },
+          {
+            "type": "image_url",
+            "image_url": {
+              "url": "{{artifact:art-lead-front}}"
+            }
+          }
         ]
       }
     ],
-    "modalities": ["image", "text"],
-    "image_config": { "aspect_ratio": "16:9" }
+    "modalities": [
+      "image",
+      "text"
+    ],
+    "image_config": {
+      "aspect_ratio": "16:9"
+    }
   },
   "estimate": 0.14,
-  "tranche": null,
   "idempotency_key": "<key>",
-  "fetch_to": "plates/cands/P001/1.json",
-  "poll": null,
-  "download": null,
-  "kit": {
-    "reference": "P001",
-    "kind": "image",
-    "provider": "openrouter",
-    "model": "google/gemini-3-pro-image",
-    "mode": "chat",
-    "attempt": 1,
-    "rate_per_image": 0.14,
-    "prompt_words": 45
-  }
+  "fetch_to": "plates/cands/P001/1.json"
 }

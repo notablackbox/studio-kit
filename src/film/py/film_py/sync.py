@@ -11,7 +11,9 @@ active in either signal (frame RMS over 10 percent of that signal's 95th percent
 of silence in both is not judged and bridges a span. The in-sync spans are the runs of judged
 windows over 0.2 (from the first one's start to the last one's end, never past the next failing
 window's start, at least 0.5 s); the divergence is the start of the first judged window at or
-under 0.2. Times are seconds from the window file's start; the Node side maps them to song time
+under 0.2. A take that ends before the window does, while our window still holds voice, diverges
+from the take's end at the latest: the missing tail is not in sync. Times are seconds from the
+window file's start; the Node side maps them to song time
 and finds the cut. A diagnostic PNG shows both spectrograms on the window's timeline and the
 NCC curve with its threshold.
 
@@ -159,6 +161,12 @@ def main(argv) -> None:
 
         hop_s = HOP / RATE
         diverge = next((i for i in starts if judged[i] and curve[i] <= THRESHOLD), None)
+        # The window frame where the take runs out; voice of ours after it was never copied.
+        take_end = nt - best_lag
+        missing = 0.0
+        if 0 <= take_end < nr and ref_on[take_end:].any():
+            missing = (nr - take_end) * hop_s
+            diverge = take_end if diverge is None else min(diverge, take_end)
         spans = []
         first = last = None
         for i in starts + [None]:
@@ -186,6 +194,8 @@ def main(argv) -> None:
             "frames": {"window": nr, "take": nt, "hop_s": hop_s},
             "synced": spans,
             "diverge_at": None if diverge is None else round(diverge * hop_s, 4),
+            "missing_tail_s": round(missing, 4),
+            "curve_t0_s": round(starts[0] * hop_s, 4) if starts else 0.0,
             "judged": int(judged.sum()),
             "curve": [round(float(curve[i]), 3) if judged[i] else None for i in starts[::5]],
             "curve_step_s": round(5 * hop_s, 4),

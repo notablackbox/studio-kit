@@ -1,14 +1,18 @@
 import { closeSync, constants, mkdirSync, openSync, readFileSync, writeSync } from "node:fs";
 import { dirname, relative, isAbsolute } from "node:path";
 import { EXIT, Refused, Unexpected, fromCaller, isMain, outProblem, parseFlags, requireFile, run, shown, writeReport } from "./lib/cli.ts";
-import { type Kind, type Row, readLedger, stateOf } from "./lib/ledger.ts";
+import { type Kind, type Row, idempotencyKey, readLedger, stateOf } from "./lib/ledger.ts";
 
 // film:ledger records what was asked of a provider and what came back (spec D6): one row per
-// call appended to ledger.jsonl, never a row rewritten. `--asked <request.json>` records a
-// request film:request shaped (its key, reference, attempt, provider and estimate); `--polled`,
+// call appended to ledger.jsonl, never a row rewritten. `--asked <request.json> [--meta <file>]`
+// records a request film:request shaped, with its meta file (by default the sibling
+// <id>.request.meta.json): the key, recomputed from the request's body and the meta's
+// provider, model and attempt, and the reference, attempt, provider and estimate. `--polled`,
 // `--delivered --file`, `--declined` and `--failed` name the key of an asked row and carry its
 // facts, with the provider's figures as returned (`--figures`, a JSON object) and a reason. A
-// declined row closes the reference on every provider: film:request refuses it from then on.
+// declined row closes the reference on every provider: film:request refuses it from then on,
+// and so does this command for any row but the decline's own (a delivered key cannot be
+// declined either).
 // `--check <reference>` prints the reference's state. The ledger must sit inside --out, the
 // one folder the command writes in.
 
@@ -20,28 +24,36 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 type Asked = { key: string; reference: string; attempt: number; provider: string; estimate: number };
 
-function readRequest(path: string): Asked {
-  let value: unknown;
+function readJson(path: string): unknown {
   try {
-    value = JSON.parse(readFileSync(path, "utf8"));
+    return JSON.parse(readFileSync(path, "utf8"));
   } catch {
-    value = null;
+    return null;
   }
-  const kit = isObject(value) ? value.kit : null;
-  if (
-    !isObject(value) ||
-    !isObject(kit) ||
-    typeof value.idempotency_key !== "string" ||
-    !/^[0-9a-f]{64}$/.test(value.idempotency_key) ||
-    typeof value.estimate !== "number" ||
-    typeof kit.reference !== "string" ||
-    typeof kit.provider !== "string" ||
-    !Number.isInteger(kit.attempt) ||
-    kit.attempt < 1
-  ) {
+}
+
+// The request (call_external's input) and its meta file, checked against each other: the key
+// must be the one the body, the provider, the model and the attempt give.
+function readRequest(requestPath: string, metaPath: string): Asked {
+  const request = readJson(requestPath);
+  if (!isObject(request) || typeof request.idempotency_key !== "string" || !/^[0-9a-f]{64}$/.test(request.idempotency_key) || typeof request.estimate !== "number" || !isObject(request.body)) {
     throw new Refused(["--asked is not a request file"]);
   }
-  return { key: value.idempotency_key, reference: kit.reference, attempt: kit.attempt, provider: kit.provider, estimate: value.estimate };
+  const meta = readJson(requireFile(metaPath, "--meta"));
+  if (
+    !isObject(meta) ||
+    typeof meta.reference !== "string" ||
+    typeof meta.provider !== "string" ||
+    typeof meta.model !== "string" ||
+    !Number.isInteger(meta.attempt) ||
+    meta.attempt < 1
+  ) {
+    throw new Refused(["--meta is not a request meta file"]);
+  }
+  if (idempotencyKey(meta.provider, meta.model, request.body, meta.attempt) !== request.idempotency_key) {
+    throw new Refused([`--asked: the idempotency_key is not the key of the body, provider, model and attempt ${meta.attempt}`]);
+  }
+  return { key: request.idempotency_key, reference: meta.reference, attempt: meta.attempt, provider: meta.provider, estimate: request.estimate };
 }
 
 // Appends one line, never through a link at the ledger's name (O_NOFOLLOW), never truncating.
@@ -75,6 +87,7 @@ async function main(): Promise<number> {
     file: { type: "string" },
     figures: { type: "string" },
     reason: { type: "string" },
+    meta: { type: "string" },
   });
   const given = ACTIONS.filter((a) => values[a] !== undefined);
   if (!values.ledger || !values.out || given.length === 0) {
@@ -85,6 +98,7 @@ async function main(): Promise<number> {
   const target = values[action]!;
   if (action === "delivered" && values.file === undefined) throw new Refused(["--delivered needs --file <path>"]);
   if (action !== "delivered" && values.file !== undefined) throw new Refused(["--file goes with --delivered only"]);
+  if (action !== "asked" && values.meta !== undefined) throw new Refused(["--meta goes with --asked only"]);
   if ((action === "asked" || action === "check") && (values.figures !== undefined || values.reason !== undefined)) {
     throw new Refused(["--figures and --reason go with the rows after asked"]);
   }
@@ -123,9 +137,12 @@ async function main(): Promise<number> {
   }
 
   let row: Row;
+  let metaPath: string | null = null;
   const ts = new Date().toISOString();
   if (action === "asked") {
-    const asked = readRequest(requireFile(fromCaller(target), "--asked"));
+    const requestPath = requireFile(fromCaller(target), "--asked");
+    metaPath = values.meta !== undefined ? fromCaller(values.meta) : requestPath.replace(/(\.json)?$/i, ".meta.json");
+    const asked = readRequest(requestPath, metaPath);
     if (rows.some((r) => r.key === asked.key)) throw new Refused([`--asked: key ${shown(asked.key)} is already in the ledger`]);
     const state = stateOf(rows, asked.reference);
     if (state.declined_on.length > 0) {
@@ -138,8 +155,13 @@ async function main(): Promise<number> {
   } else {
     const origin = rows.find((r) => r.kind === "asked" && r.key === target);
     if (!origin) throw new Refused([`--${action}: key ${shown(target)} is not in the ledger`]);
-    if (action === "delivered" && rows.some((r) => r.kind === "delivered" && r.key === target)) {
-      throw new Refused([`--delivered: key ${shown(target)} is already delivered`]);
+    if ((action === "delivered" || action === "declined") && rows.some((r) => r.kind === "delivered" && r.key === target)) {
+      throw new Refused([`--${action}: key ${shown(target)} is already delivered`]);
+    }
+    // A declined reference is terminal: nothing after the decline but another decline.
+    const closedOn = stateOf(rows, origin.reference).declined_on;
+    if (action !== "declined" && closedOn.length > 0) {
+      throw new Refused([`--${action}: ${shown(origin.reference)} was declined on ${closedOn.join(" and ")}: the reference is closed`]);
     }
     row = {
       ts,
@@ -159,7 +181,7 @@ async function main(): Promise<number> {
   const state = stateOf([...rows, row], row.reference);
   writeReport(out, "ledger", {
     ok: true,
-    inputs: { ledger: ledgerPath, action, key: row.key, file: row.file, figures: row.figures, reason: row.reason },
+    inputs: { ledger: ledgerPath, action, key: row.key, meta: metaPath, file: row.file, figures: row.figures, reason: row.reason },
     outputs: { ledger: relative(out, ledgerPath), report: "ledger-report.json" },
     row,
     state,

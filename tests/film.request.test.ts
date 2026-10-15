@@ -1,17 +1,19 @@
 import { before, test } from "node:test";
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { film, kitRoot, lines } from "./fixtures/film.ts";
+import { film, lines } from "./fixtures/film.ts";
 import { boardDir } from "./fixtures/board.ts";
+import { keyOf, requestsFixture as requests } from "./fixtures/requests.ts";
 
-// film:request shapes the input of the harness's call_external tool for one clip or image slot:
-// the secret's name, the provider's URL, the body with {{artifact:<id>}} placeholders, the
-// estimate, the idempotency key (provider, model, body and the attempt the ledger holds) and
-// where the result goes. It never calls anything. The bodies are compared with recorded ones.
+// film:request shapes the input of the harness's call_external tool for one clip or image slot,
+// exactly as spec 8.2 has it: the secret's name, the provider's URL, the method, the body with
+// {{artifact:<id>}} placeholders, the estimate, the idempotency key (provider, model, body and
+// the attempt the ledger holds) and `return` (an asynchronous video job) or `fetch_to` (an
+// image). Everything kit-side goes in <id>.request.meta.json: the reference, the attempt, the
+// rates, the poll and the download. It never calls anything. Both files are compared with
+// recorded ones.
 
-const requests = join(kitRoot, "tests", "fixtures", "requests");
 let dir = "";
 before(() => {
   dir = boardDir();
@@ -19,24 +21,20 @@ before(() => {
   cpSync(join(requests, "P001.json"), join(dir, "P001.json"));
 });
 
-// The test's own canonical JSON and key, written apart from the kit's.
-function canon(v: unknown): string {
-  if (Array.isArray(v)) return `[${v.map(canon).join(",")}]`;
-  if (v && typeof v === "object") {
-    const o = v as Record<string, unknown>;
-    return `{${Object.keys(o)
-      .sort()
-      .map((k) => `${JSON.stringify(k)}:${canon(o[k])}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(v);
-}
-const keyOf = (provider: string, model: string, body: unknown, attempt: number) =>
-  createHash("sha256").update(canon({ attempt, body, model, provider })).digest("hex");
-
 const golden = (name: string) => JSON.parse(readFileSync(join(requests, name), "utf8"));
 const readJson = (...parts: string[]) => JSON.parse(readFileSync(join(dir, ...parts), "utf8"));
 const normal = (request: Record<string, unknown>) => ({ ...request, idempotency_key: "<key>" });
+// The request and its meta file, each compared with its golden; the meta holds the same key.
+function matches(out: string, id: string, goldenName: string) {
+  const request = readJson(out, `${id}.request.json`);
+  const meta = readJson(out, `${id}.request.meta.json`);
+  assert.deepEqual(normal(request), golden(`${goldenName}.request.json`));
+  assert.deepEqual(normal(meta), golden(`${goldenName}.request.meta.json`));
+  assert.equal(meta.idempotency_key, request.idempotency_key);
+  return { request, meta };
+}
+// Exactly call_external's input fields, nothing of the kit's.
+const INPUT = (result: "return" | "fetch_to") => ["secret", "url", "method", "body", "estimate", "idempotency_key", result];
 
 const W01 = (provider: string, out: string, ledger = "ledger.jsonl", extra: string[] = []) => [
   "--clip", "clips/W01.json", "--provider", provider, "--ledger", ledger, "--out", out,
@@ -47,8 +45,13 @@ test("a sung window on OpenRouter: reference mode, the recorded body, the key, t
   const result = film("request", dir, W01("openrouter", "or"));
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.equal(result.stderr, "");
-  const request = readJson("or", "W01.request.json");
-  assert.deepEqual(normal(request), golden("W01.openrouter.request.json"));
+  const { request, meta } = matches("or", "W01", "W01.openrouter");
+  assert.deepEqual(Object.keys(request), INPUT("return"));
+  assert.equal(request.return, true);
+  // Submit, poll, download: the poll is a GET with no body; the download applies fetch_to to
+  // the result URL the poll returns.
+  assert.deepEqual(meta.poll, { method: "GET", url: "https://openrouter.ai/api/v1/videos/{id}", body: null });
+  assert.deepEqual(meta.download, { from: "unsigned_urls[0]", fetch_to: "clips/W01/take-1.mp4" });
   assert.equal(request.idempotency_key, keyOf("openrouter", "bytedance/seedance-2.5", request.body, 1));
   // The lyric in plain quotes, no braces, no output settings in the prompt.
   assert.match(request.body.prompt, /"the city wakes we count the windows"/);
@@ -61,7 +64,7 @@ test("a sung window on OpenRouter: reference mode, the recorded body, the key, t
     clip: join(dir, "clips", "W01.json"), image: null, provider: "openrouter", ledger: join(dir, "ledger.jsonl"),
     start_artifact: "art-p-street", window_artifact: "art-W01-wav", rate_per_second: null, rate_per_image: null, resolution: null,
   });
-  assert.deepEqual(report.outputs, { request: "W01.request.json", report: "request-report.json" });
+  assert.deepEqual(report.outputs, { request: "W01.request.json", meta: "W01.request.meta.json", report: "request-report.json" });
   assert.equal(report.key, request.idempotency_key);
   assert.equal(report.estimate, 1.16);
   assert.equal(report.attempt, 1);
@@ -69,7 +72,7 @@ test("a sung window on OpenRouter: reference mode, the recorded body, the key, t
   assert.deepEqual(lines(result.stdout), [
     `request: "W01" sung on openrouter, attempt 1, 5 s at 720p, estimate $1.16, key ${request.idempotency_key.slice(0, 12)}`,
   ]);
-  assert.deepEqual(readdirSync(join(dir, "or")).sort(), ["W01.request.json", "request-report.json"]);
+  assert.deepEqual(readdirSync(join(dir, "or")).sort(), ["W01.request.json", "W01.request.meta.json", "request-report.json"]);
   // Nothing was written beside the ledger: film:request only reads it.
   assert.equal(existsSync(join(dir, "ledger.jsonl")), false);
 });
@@ -77,15 +80,14 @@ test("a sung window on OpenRouter: reference mode, the recorded body, the key, t
 test("the same sung window on Higgsfield, and a motion clip on both providers", () => {
   const hf = film("request", dir, W01("higgsfield", "hf"));
   assert.equal(hf.status, 0, hf.stdout + hf.stderr);
-  const request = readJson("hf", "W01.request.json");
-  assert.deepEqual(normal(request), golden("W01.higgsfield.request.json"));
+  const { request } = matches("hf", "W01", "W01.higgsfield");
   assert.equal(request.idempotency_key, keyOf("higgsfield", "bytedance/seedance-2.5", request.body, 1));
 
   for (const provider of ["openrouter", "higgsfield"]) {
     const result = film("request", dir, ["--clip", "clips/M01.json", "--provider", provider, "--ledger", "ledger.jsonl", "--out", `m-${provider}`, "--start-artifact", "art-p-roof"]);
     assert.equal(result.status, 0, result.stdout + result.stderr);
-    const motion = readJson(`m-${provider}`, "M01.request.json");
-    assert.deepEqual(normal(motion), golden(`M01.${provider}.request.json`));
+    const { request: motion } = matches(`m-${provider}`, "M01", `M01.${provider}`);
+    assert.deepEqual(Object.keys(motion), INPUT("return"));
     assert.equal(motion.idempotency_key, keyOf(provider, "bytedance/seedance-2.5", motion.body, 1));
   }
 });
@@ -93,8 +95,11 @@ test("the same sung window on Higgsfield, and a motion clip on both providers", 
 test("an image slot on OpenRouter: the image model through chat completions, no poll", () => {
   const result = film("request", dir, ["--image", "P001.json", "--provider", "openrouter", "--ledger", "ledger.jsonl", "--out", "img"]);
   assert.equal(result.status, 0, result.stdout + result.stderr);
-  const request = readJson("img", "P001.request.json");
-  assert.deepEqual(normal(request), golden("P001.openrouter.request.json"));
+  const { request, meta } = matches("img", "P001", "P001.openrouter");
+  // Synchronous: the POST's response body is streamed to fetch_to; nothing to poll.
+  assert.deepEqual(Object.keys(request), INPUT("fetch_to"));
+  assert.equal(request.fetch_to, "plates/cands/P001/1.json");
+  assert.equal(meta.poll, null);
   assert.equal(request.idempotency_key, keyOf("openrouter", "google/gemini-3-pro-image", request.body, 1));
   assert.deepEqual(lines(result.stdout), [`request: "P001" image on openrouter, attempt 1, estimate $0.14, key ${request.idempotency_key.slice(0, 12)}`]);
   const over = film("request", dir, ["--image", "P001.json", "--provider", "openrouter", "--ledger", "ledger.jsonl", "--out", "img2", "--rate-per-image", "0.5"]);
@@ -117,16 +122,17 @@ test("the key is deterministic; a new attempt in the ledger gives a new key and 
   assert.equal(next.status, 0, next.stdout + next.stderr);
   const second = readJson("k3", "W01.request.json");
   assert.deepEqual(second.body, first.body);
-  assert.equal(second.kit.attempt, 2);
-  assert.equal(second.fetch_to, "clips/W01/take-2.mp4");
+  const secondMeta = readJson("k3", "W01.request.meta.json");
+  assert.equal(secondMeta.attempt, 2);
+  assert.equal(secondMeta.download.fetch_to, "clips/W01/take-2.mp4");
   assert.notEqual(second.idempotency_key, first.idempotency_key);
   assert.equal(second.idempotency_key, keyOf("openrouter", "bytedance/seedance-2.5", second.body, 2));
   // A failed attempt still counts: the attempt after it is 3.
   assert.equal(film("ledger", dir, ["--ledger", "keys.jsonl", "--out", ".", "--asked", "k3/W01.request.json"]).status, 0);
   assert.equal(film("ledger", dir, ["--ledger", "keys.jsonl", "--out", ".", "--failed", second.idempotency_key, "--reason", "HTTP 502"]).status, 0);
   assert.equal(film("request", dir, W01("higgsfield", "k4", "keys.jsonl")).status, 0);
-  assert.equal(readJson("k4", "W01.request.json").kit.attempt, 3);
-  assert.equal(readJson("k4", "W01.request.json").fetch_to, "clips/W01/take-3.mp4");
+  assert.equal(readJson("k4", "W01.request.meta.json").attempt, 3);
+  assert.equal(readJson("k4", "W01.request.meta.json").download.fetch_to, "clips/W01/take-3.mp4");
 });
 
 test("--resolution and --rate-per-second change the body, the estimate and the key", () => {
@@ -173,6 +179,7 @@ test("the prompt rules and the clip's fields are refusals: one line each, exit 2
     [["--clip", variant("X2", (c) => (c.window.t1 = c.window.t0 + 8.5))], ['"X2" window is 8.50 s (0.98 to 9.48), want 4 to 8 s']],
     [["--clip", variant("X3", (c) => (c.body.prompt = long))], ['"X3" sung prompt is 120 words, want 110 or fewer']],
     [["--clip", variant("X4", (c) => (c.words = "{the city wakes}"))], ['"X4" words have braces: the lyric goes in plain quotes']],
+    [["--clip", variant("X13", (c) => (c.words = 'the city "wakes"'))], ['"X13" words have a double quote: the kit quotes the lyric']],
     [["--clip", variant("X5", (c) => (c.body.prompt = 'she sings {"the city wakes"} to the lens'))], ['"X5" prompt has braces: the lyric goes in plain quotes']],
     [["--clip", variant("X6", (c) => (c.body.prompt = "close-up in 720p, 16:9, a 5 second clip"))], ['"X6" prompt has output settings ("720p", "16:9", "5 second clip"): they go in the request, never the prompt']],
     [["--clip", variant("X7", (c) => (c.body.prompt = "close-up, duration five, cinematic"))], ['"X7" prompt has output settings ("duration"): they go in the request, never the prompt']],
@@ -235,6 +242,16 @@ test("a sung prompt over about 90 words is a warning, not a refusal", () => {
   const report = readJson("warn", "request-report.json");
   assert.deepEqual(report.warnings, ['"X20" sung prompt is 96 words: a sung window copies best at about 90 or fewer']);
   assert.equal(lines(result.stdout)[1], 'warning: "X20" sung prompt is 96 words: a sung window copies best at about 90 or fewer');
+
+  // More than two timed beats: the short sung form allows two.
+  const beats = variant("X21", (c) => (c.body.prompt = "close-up; 0-1s: she looks up; at 1.5 s she smiles; 2-3s: she leans in"));
+  const timed = film("request", dir, ["--clip", beats, "--provider", "openrouter", "--ledger", "ledger.jsonl", "--out", "warn2", "--start-artifact", "a1", "--window-artifact", "a2"]);
+  assert.equal(timed.status, 0, timed.stdout + timed.stderr);
+  assert.deepEqual(readJson("warn2", "request-report.json").warnings, ['"X21" sung prompt has 3 timed beats: a sung window copies best with two or fewer']);
+  // Two are fine.
+  const two = variant("X22", (c) => (c.body.prompt = "close-up; 0-1s: she looks up; 2-3s: she leans in"));
+  assert.equal(film("request", dir, ["--clip", two, "--provider", "openrouter", "--ledger", "ledger.jsonl", "--out", "warn3", "--start-artifact", "a1", "--window-artifact", "a2"]).status, 0);
+  assert.deepEqual(readJson("warn3", "request-report.json").warnings, []);
 });
 
 test("anything unexpected is exit 1 with one line on stderr", () => {

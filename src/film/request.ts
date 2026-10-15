@@ -3,13 +3,16 @@ import { basename } from "node:path";
 import { EXIT, Refused, fromCaller, isMain, outProblem, parseFlags, requireFile, run, shown, writeIn, writeReport } from "./lib/cli.ts";
 import { idempotencyKey, readLedger, stateOf } from "./lib/ledger.ts";
 
-// film:request shapes one paid call and makes none (spec D6 and 8.2): the input of the
-// harness's call_external tool for a clip (clips/<id>.json) or an image slot. It holds the
-// secret's name (never a value), the provider's URL, the method, the body with
-// {{artifact:<id>}} placeholders for the plate and the window the skill saved as artifacts,
-// the estimate, the idempotency key (SHA-256 of the provider, the model, the body and the
-// attempt number: the ledger's asked rows for the reference, plus one), where the result
-// goes (fetch_to), and how to poll and download an asynchronous job. A reference the ledger
+// film:request shapes one paid call and makes none (spec D6 and 8.2). <id>.request.json is
+// exactly the input of the harness's call_external tool for a clip (clips/<id>.json) or an
+// image slot: the secret's name (never a value), the provider's URL, the method, the body
+// with {{artifact:<id>}} placeholders for the plate and the window the skill saved as
+// artifacts, the estimate, the idempotency key (SHA-256 of the provider, the model, the body
+// and the attempt number: the ledger's asked rows for the reference, plus one), and `return`
+// for an asynchronous video job (the job comes back to the skill) or `fetch_to` for a
+// synchronous image. <id>.request.meta.json holds the kit's side: the reference, the attempt,
+// the rates, the poll (a GET with no body on the provider's status URL) and the download
+// (fetch_to applied to the result URL the poll returns). A reference the ledger
 // marks declined on any provider is refused, and so is a prompt that breaks the seedance
 // wiki's rules: a sung window of 4 to 8 s, the lyric in plain quotes (braces made the model
 // re-sing), output settings in the request and never in the prompt, a short sung prompt.
@@ -31,17 +34,15 @@ const SECRETS: Record<Provider, string> = { openrouter: "OPENROUTER_API_KEY", hi
 // model (POST /api/v1/videos, polled at /api/v1/videos/{id}, fetched from .../content), and
 // image models through chat completions. Higgsfield: one endpoint per model and mode, polled
 // at /requests/{request_id}/status, the result at the completed status's video.url.
-type Route = { url: string; poll: { method: "GET"; url: string } | null; download: { method: "GET"; url: string } | null };
-const OPENROUTER_VIDEO: Route = {
-  url: "https://openrouter.ai/api/v1/videos",
-  poll: { method: "GET", url: "https://openrouter.ai/api/v1/videos/{id}" },
-  download: { method: "GET", url: "https://openrouter.ai/api/v1/videos/{id}/content?index=0" },
-};
-const OPENROUTER_CHAT: Route = { url: "https://openrouter.ai/api/v1/chat/completions", poll: null, download: null };
+// `poll` names the submit response's id field in braces; `from` is the field of the completed
+// status that holds the result URL.
+type Route = { url: string; poll: string | null; from: string | null };
+const OPENROUTER_VIDEO: Route = { url: "https://openrouter.ai/api/v1/videos", poll: "https://openrouter.ai/api/v1/videos/{id}", from: "unsigned_urls[0]" };
+const OPENROUTER_CHAT: Route = { url: "https://openrouter.ai/api/v1/chat/completions", poll: null, from: null };
 const higgsfield = (model: string, mode: string): Route => ({
   url: `https://api.higgsfield.ai/${model}/${mode}`,
-  poll: { method: "GET", url: "https://api.higgsfield.ai/requests/{request_id}/status" },
-  download: { method: "GET", url: "{video.url}" },
+  poll: "https://api.higgsfield.ai/requests/{request_id}/status",
+  from: "video.url",
 });
 const VIDEO_MODELS: Record<Provider, Record<string, { reference: Route; first_frame: Route }>> = {
   openrouter: { "bytedance/seedance-2.5": { reference: OPENROUTER_VIDEO, first_frame: OPENROUTER_VIDEO } },
@@ -70,6 +71,10 @@ const IMAGE_RATES: Partial<Record<Provider, Record<string, number>>> = {
 // Output settings written into a prompt: they belong in the request body.
 const SETTINGS =
   /\b\d{3,4}p\b|\b[48]k\b|\b\d+\s*fps\b|\bframes per second\b|\b(?:16:9|9:16|4:3|3:4|1:1|21:9|9:21)(?!\d)|\baspect ratio\b|\bresolution\b|\bduration\b|\b\d+(?:\.\d+)?[- ]?(?:seconds?|secs?|s)[- ](?:long|clip|video|shot)\b/gi;
+
+// A timed beat in a prompt: `0-1s`, `2 to 3 s`, `at 1.5 s`.
+const TIMED = /\b\d+(?:\.\d+)?(?:\s*(?:-|to)\s*\d+(?:\.\d+)?)?\s*s\b/g;
+const TIMED_MAX = 2;
 
 const isObject = (v: unknown): v is Record<string, any> => typeof v === "object" && v !== null && !Array.isArray(v);
 const wordCount = (text: string) => text.split(/\s+/).filter((w) => w !== "").length;
@@ -195,6 +200,7 @@ async function main(): Promise<number> {
     }
   }
   if (kind === "sung" && typeof spec.words === "string" && /[{}]/.test(spec.words)) problems.push(`${shown(id)} words have braces: the lyric goes in plain quotes`);
+  if (kind === "sung" && typeof spec.words === "string" && spec.words.includes('"')) problems.push(`${shown(id)} words have a double quote: the kit quotes the lyric`);
   if (kind === "sung" && prompt !== null && /[{}]/.test(prompt)) problems.push(`${shown(id)} prompt has braces: the lyric goes in plain quotes`);
   if (prompt !== null) {
     const found = settingsIn(prompt);
@@ -205,6 +211,8 @@ async function main(): Promise<number> {
     const n = wordCount(text);
     if (n > SUNG_WORDS_MAX) problems.push(`${shown(id)} sung prompt is ${n} words, want ${SUNG_WORDS_MAX} or fewer`);
     else if (n > SUNG_WORDS_WARN) warnings.push(`${shown(id)} sung prompt is ${n} words: a sung window copies best at about ${SUNG_WORDS_WARN} or fewer`);
+    const beats = prompt === null ? 0 : [...prompt.matchAll(TIMED)].length;
+    if (beats > TIMED_MAX) warnings.push(`${shown(id)} sung prompt has ${beats} timed beats: a sung window copies best with two or fewer`);
   }
   if (problems.length > 0) throw new Refused(problems);
 
@@ -289,30 +297,36 @@ async function main(): Promise<number> {
 
   const key = idempotencyKey(provider, modelId, requestBody, attempt);
   const fetchTo = kind === "image" ? `plates/cands/${id}/${attempt}.json` : `clips/${id}/take-${attempt}.mp4`;
+  // call_external's input, and nothing else: the skill adds the tranche it opened.
   const request = {
     secret: SECRETS[provider],
     url: route.url,
     method: "POST",
     body: requestBody,
     estimate,
-    tranche: null,
     idempotency_key: key,
-    fetch_to: fetchTo,
-    poll: route.poll,
-    download: route.download,
-    kit: {
-      reference: id,
-      kind,
-      provider,
-      model: modelId,
-      mode,
-      attempt,
-      ...(kind === "image" ? { rate_per_image: rate } : { duration, resolution, rate_per_second: rate }),
-      prompt_words: wordCount(text ?? ""),
-    },
+    ...(kind === "image" ? { fetch_to: fetchTo } : { return: true }),
   };
   const name = `${id}.request.json`;
+  const metaName = `${id}.request.meta.json`;
+  const meta = {
+    reference: id,
+    kind,
+    provider,
+    model: modelId,
+    mode,
+    attempt,
+    idempotency_key: key,
+    estimate,
+    ...(kind === "image" ? { rate_per_image: rate } : { duration, resolution, rate_per_second: rate }),
+    prompt_words: wordCount(text ?? ""),
+    request: name,
+    // Submit (return), poll until done, download the result URL the poll returns.
+    poll: route.poll === null ? null : { method: "GET", url: route.poll, body: null },
+    download: route.from === null ? null : { from: route.from, fetch_to: fetchTo },
+  };
   writeIn(out, name, JSON.stringify(request, null, 2) + "\n");
+  writeIn(out, metaName, JSON.stringify(meta, null, 2) + "\n");
   writeReport(out, "request", {
     ok: true,
     inputs: {
@@ -326,7 +340,7 @@ async function main(): Promise<number> {
       rate_per_image: ratePerImage,
       resolution: values.resolution ?? null,
     },
-    outputs: { request: name, report: "request-report.json" },
+    outputs: { request: name, meta: metaName, report: "request-report.json" },
     reference: id,
     key,
     estimate,

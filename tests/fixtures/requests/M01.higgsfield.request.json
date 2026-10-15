@@ -10,21 +10,6 @@
     "image_url": "{{artifact:art-p-roof}}"
   },
   "estimate": 2.8,
-  "tranche": null,
   "idempotency_key": "<key>",
-  "fetch_to": "clips/M01/take-1.mp4",
-  "poll": { "method": "GET", "url": "https://api.higgsfield.ai/requests/{request_id}/status" },
-  "download": { "method": "GET", "url": "{video.url}" },
-  "kit": {
-    "reference": "M01",
-    "kind": "motion",
-    "provider": "higgsfield",
-    "model": "bytedance/seedance-2.5",
-    "mode": "first_frame",
-    "attempt": 1,
-    "duration": 4,
-    "resolution": "720p",
-    "rate_per_second": 0.7,
-    "prompt_words": 88
-  }
+  "return": true
 }

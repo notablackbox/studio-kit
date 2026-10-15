@@ -10,26 +10,21 @@
     "aspect_ratio": "16:9",
     "generate_audio": true,
     "input_references": [
-      { "type": "image_url", "image_url": { "url": "{{artifact:art-p-street}}" } },
-      { "type": "audio_url", "audio_url": { "url": "{{artifact:art-W01-wav}}" } }
+      {
+        "type": "image_url",
+        "image_url": {
+          "url": "{{artifact:art-p-street}}"
+        }
+      },
+      {
+        "type": "audio_url",
+        "audio_url": {
+          "url": "{{artifact:art-W01-wav}}"
+        }
+      }
     ]
   },
   "estimate": 1.16,
-  "tranche": null,
   "idempotency_key": "<key>",
-  "fetch_to": "clips/W01/take-1.mp4",
-  "poll": { "method": "GET", "url": "https://openrouter.ai/api/v1/videos/{id}" },
-  "download": { "method": "GET", "url": "https://openrouter.ai/api/v1/videos/{id}/content?index=0" },
-  "kit": {
-    "reference": "W01",
-    "kind": "sung",
-    "provider": "openrouter",
-    "model": "bytedance/seedance-2.5",
-    "mode": "reference",
-    "attempt": 1,
-    "duration": 5,
-    "resolution": "720p",
-    "rate_per_second": 0.231,
-    "prompt_words": 80
-  }
+  "return": true
 }

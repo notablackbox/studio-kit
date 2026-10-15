@@ -1,0 +1,24 @@
+{
+  "reference": "W01",
+  "kind": "sung",
+  "provider": "openrouter",
+  "model": "bytedance/seedance-2.5",
+  "mode": "reference",
+  "attempt": 1,
+  "idempotency_key": "<key>",
+  "estimate": 1.16,
+  "duration": 5,
+  "resolution": "720p",
+  "rate_per_second": 0.231,
+  "prompt_words": 80,
+  "request": "W01.request.json",
+  "poll": {
+    "method": "GET",
+    "url": "https://openrouter.ai/api/v1/videos/{id}",
+    "body": null
+  },
+  "download": {
+    "from": "unsigned_urls[0]",
+    "fetch_to": "clips/W01/take-1.mp4"
+  }
+}

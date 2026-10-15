@@ -15,8 +15,7 @@ import type { RunResult } from "../render.ts";
 // the take's sync entry in its clip file. A take that does not copy the window is exit 3.
 
 const COMMAND = "film:sync";
-const TIMEOUT_MS = 5 * 60 * 1000;
-const TOOL_TIMEOUT_MS = 5 * 60 * 1000;
+const TIMEOUT_MS = 5 * 60 * 1000; // for ffprobe, ffmpeg and the Python side alike
 const THRESHOLD = 0.2;
 
 type Measured = {
@@ -25,6 +24,8 @@ type Measured = {
   frames: Record<string, number>;
   synced: [number, number][];
   diverge_at: number | null;
+  missing_tail_s: number;
+  curve_t0_s: number;
   judged: number;
   curve: (number | null)[];
   curve_step_s: number;
@@ -33,9 +34,9 @@ type Measured = {
 
 async function tool(command: string, args: string[]): Promise<RunResult> {
   const { runProcess } = await import("../render.ts");
-  const result = await runProcess(command, args, { timeoutMs: TOOL_TIMEOUT_MS });
+  const result = await runProcess(command, args, { timeoutMs: TIMEOUT_MS });
   if (result.failure) throw new Unexpected(result.failure);
-  if (result.timedOut) throw new Unexpected(`${command} took longer than ${TOOL_TIMEOUT_MS / 60000} minutes`);
+  if (result.timedOut) throw new Unexpected(`${command} took longer than ${TIMEOUT_MS / 60000} minutes`);
   return result;
 }
 
@@ -120,7 +121,10 @@ async function main(): Promise<number> {
       threshold: THRESHOLD,
       frames: measured.frames,
       judged_windows: measured.judged,
-      curve: { step_s: measured.curve_step_s, window_s: 0.5, t0: songT0, ncc: measured.curve },
+      missing_tail_s: measured.missing_tail_s,
+      // The first measured window's start in song time: later than --song-t0 when the take
+      // starts inside the window (a negative lag).
+      curve: { step_s: measured.curve_step_s, window_s: 0.5, t0: song(measured.curve_t0_s), ncc: measured.curve },
     });
     const name = shown(basename(take));
     if (mode === "diverged") {

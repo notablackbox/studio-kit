@@ -8,25 +8,14 @@
     "resolution": "720p",
     "aspect_ratio": "16:9",
     "generate_audio": true,
-    "image_urls": ["{{artifact:art-p-street}}"],
-    "audio_urls": ["{{artifact:art-W01-mp3}}"]
+    "image_urls": [
+      "{{artifact:art-p-street}}"
+    ],
+    "audio_urls": [
+      "{{artifact:art-W01-mp3}}"
+    ]
   },
   "estimate": 3.5,
-  "tranche": null,
   "idempotency_key": "<key>",
-  "fetch_to": "clips/W01/take-1.mp4",
-  "poll": { "method": "GET", "url": "https://api.higgsfield.ai/requests/{request_id}/status" },
-  "download": { "method": "GET", "url": "{video.url}" },
-  "kit": {
-    "reference": "W01",
-    "kind": "sung",
-    "provider": "higgsfield",
-    "model": "bytedance/seedance-2.5",
-    "mode": "reference",
-    "attempt": 1,
-    "duration": 5,
-    "resolution": "720p",
-    "rate_per_second": 0.7,
-    "prompt_words": 80
-  }
+  "return": true
 }

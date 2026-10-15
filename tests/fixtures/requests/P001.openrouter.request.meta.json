@@ -1,0 +1,15 @@
+{
+  "reference": "P001",
+  "kind": "image",
+  "provider": "openrouter",
+  "model": "google/gemini-3-pro-image",
+  "mode": "chat",
+  "attempt": 1,
+  "idempotency_key": "<key>",
+  "estimate": 0.14,
+  "rate_per_image": 0.14,
+  "prompt_words": 45,
+  "request": "P001.request.json",
+  "poll": null,
+  "download": null
+}

@@ -635,7 +635,8 @@ what was asked and what came back.
 
 `film:request --clip clips/<id>.json --provider openrouter|higgsfield --ledger ledger.jsonl --out <dir> --start-artifact <id> [--window-artifact <id>] [--resolution 480p|720p|1080p] [--rate-per-second <usd>]`
 (or `--image <slot.json>` for an image slot, with `[--rate-per-image <usd>]`)
-writes `<id>.request.json`, the `call_external` input:
+writes two files. `<id>.request.json` is exactly the `call_external` input of
+spec 8.2, nothing more (the skill adds the id of the tranche it opened):
 
 - `secret`: `OPENROUTER_API_KEY` or `HIGGSFIELD_API_KEY`, the name only.
 - `url` and `method: POST`: the provider's endpoint for the model and the mode.
@@ -649,20 +650,32 @@ writes `<id>.request.json`, the `call_external` input:
 - `estimate`: dollars, rounded up to the cent: the clip's `body.duration`
   times the rate per second for the provider, the model and the resolution
   (the table below, or `--rate-per-second`), or one image at the image rate.
-- `tranche: null`: the skill sets it to the tranche it opened.
 - `idempotency_key`: SHA-256 of the canonical JSON (keys sorted, no spaces) of
   `{attempt, body, model, provider}`. The attempt is the number of `asked` rows
   the ledger holds for the reference (the clip or slot id), on any provider,
   plus one. The same request shaped twice gets the same key, so a retry is
   reconciled, never paid twice; a re-roll, once its request is in the ledger,
   is the next attempt and gets a new key.
-- `fetch_to`: where the result goes, `clips/<id>/take-<attempt>.mp4` for a
-  clip, `plates/cands/<id>/<attempt>.json` (the response) for an image.
-- `poll` and `download`: GET, no body; `{id}`, `{request_id}` and `{video.url}`
-  name fields of the provider's submit or status response.
-- `kit`: the reference, kind, provider, model, mode, attempt, duration,
-  resolution, rate and the prompt's word count. `film:ledger --asked` reads it;
-  it is not part of the `call_external` input.
+- `return: true` for a video clip: the submit is asynchronous and the job JSON
+  comes back to the skill. `fetch_to: plates/cands/<id>/<attempt>.json` for an
+  image slot: the call is synchronous and its response (the image) is streamed
+  to the sandbox, never into the reply.
+
+`<id>.request.meta.json` is the kit's side: `reference`, `kind`, `provider`,
+`model`, `mode`, `attempt`, `idempotency_key`, `estimate`, the duration,
+resolution and rate used, `prompt_words`, `request` (the request file's name),
+and for a video clip the rest of the sequence:
+
+1. Submit: `call_external` with the request; the job comes back.
+2. Poll: `poll` is `{method: "GET", url, body: null}` on the provider's status
+   URL, `{id}` or `{request_id}` being that field of the submit's job JSON; a
+   `poll` call carries the original key and no estimate, and spends nothing.
+3. Download: `download` is `{from, fetch_to: "clips/<id>/take-<attempt>.mp4"}`:
+   `call_external` with `fetch_to` on the result URL the completed poll returns
+   in the field `from` names (`unsigned_urls[0]` on OpenRouter, `video.url` on
+   Higgsfield).
+
+An image slot's meta has `poll` and `download` null.
 
 The bodies, as documented on 2026-10-14; re-read the providers' pages at spend:
 
@@ -670,8 +683,8 @@ The bodies, as documented on 2026-10-14; re-read the providers' pages at spend:
 |---|---|---|
 | sung window | `POST https://openrouter.ai/api/v1/videos`, reference mode: `input_references` with the plate as `image_url` (`@Image1`) and the window as `audio_url` (`@Audio1`), `generate_audio: true`. A first frame (`frame_images`) would make OpenRouter drop the audio. | `POST https://api.higgsfield.ai/bytedance/seedance-2.5/reference-to-video`: `image_urls` [the plate], `audio_urls` [the window], `generate_audio: true` |
 | motion | the same endpoint, `frame_images` [the plate, `frame_type: first_frame`], `generate_audio: false` | `POST https://api.higgsfield.ai/bytedance/seedance-2.5/image-to-video`: `image_url`, `generate_audio: false`, no aspect ratio (the first frame sets it) |
-| poll | `GET https://openrouter.ai/api/v1/videos/{id}` | `GET https://api.higgsfield.ai/requests/{request_id}/status` |
-| download | `GET https://openrouter.ai/api/v1/videos/{id}/content?index=0` | `GET {video.url}` from the completed status |
+| poll | `GET https://openrouter.ai/api/v1/videos/{id}`, no body | `GET https://api.higgsfield.ai/requests/{request_id}/status`, no body |
+| download | `fetch_to` on `unsigned_urls[0]` of the completed job (OpenRouter also serves it at `/api/v1/videos/{id}/content?index=0`) | `fetch_to` on `video.url` of the completed status |
 | image slot | `POST https://openrouter.ai/api/v1/chat/completions` (`google/gemini-3-pro-image`): the prompt and the slot's `refs` as `image_url` parts, `modalities: ["image", "text"]`, `image_config.aspect_ratio`; synchronous, no poll | no known URL: refused |
 
 The rates (`--rate-per-second` and `--rate-per-image` override them):
@@ -688,8 +701,9 @@ from the clip: a head that names `@Image1` and `@Audio1`, says the soundtrack is
 quotes; then the clip's `body.prompt` (one line of framing and light); then
 "One continuous shot, no cuts, no head turns. Only she sings. No text, letters
 or logos." A motion clip's or an image slot's prompt is its own, as written.
-Over 90 words, a sung prompt gets a warning (`warning: ...` on stdout and in the
-report); over 110 it is refused.
+Over 90 words, or more than two timed beats (`0-1s`, `2 to 3 s`, `at 1.5 s`),
+a sung prompt gets a warning (`warning: ...` on stdout and in the report);
+over 110 words it is refused.
 
 An image slot file is `{id, kind: "image", model, prompt, refs: [<artifact id>], aspect_ratio}`;
 its file name is its id.
@@ -697,7 +711,7 @@ its file name is its id.
 `film:request` refuses (exit 2, one line each, nothing written): a reference the
 ledger marks `declined` on any provider; a sung window outside 4 to 8 s; braces
 in a sung clip's words or prompt (Seedance reads `{...}` as lines to voice, and
-re-sings them); output settings in the prompt (`720p`, `4k`, `24 fps`, an
+re-sings them); a double quote in the words (the kit quotes the lyric); output settings in the prompt (`720p`, `4k`, `24 fps`, an
 aspect ratio such as `16:9`, the words `resolution`, `duration` or `aspect ratio`,
 `5 second clip`; a timeline's `0-1s:` is fine); over 110 words in a sung prompt;
 a clip without `body.prompt`, `body.duration`, `start`, or, when sung, `window`
@@ -708,7 +722,10 @@ provider, attempt, length, estimate and the key's first twelve digits:
 
 `film:ledger --ledger ledger.jsonl --out <dir>` with exactly one of:
 
-- `--asked <request.json>`: a request film:request shaped, as asked;
+- `--asked <request.json> [--meta <request.meta.json>]`: a request film:request
+  shaped, as asked (the meta file defaults to the request's sibling
+  `<id>.request.meta.json`; the key is recomputed from the request's body and
+  the meta's provider, model and attempt, and a mismatch is refused);
 - `--polled <key> [--figures <json>]`;
 - `--delivered <key> --file <path> [--figures <json>]`;
 - `--declined <key> [--reason <text>] [--figures <json>]`;
@@ -721,8 +738,9 @@ It never rewrites a row and never writes through a link. A row after `asked`
 names the key of an `asked` row and carries its reference, attempt, provider
 and estimate. `--figures` is the provider's figures as returned, a JSON object
 kept as given; the estimate is never quoted as spend. A `declined` row closes
-the reference on every provider: `film:request` refuses it from then on, and so
-does `--asked`. `--check` prints
+the reference on every provider and is terminal: `film:request` refuses it from
+then on, and so do `--asked`, `--polled`, `--delivered` and `--failed` for any
+of its keys. A delivered key cannot be declined. `--check` prints
 `ledger: "W01": 2 attempts, last delivered, declined on none, $2.32 asked`, and
 the report's `state` is `{reference, attempts, last_kind, last_key, declined_on, delivered, estimate_total}`.
 
@@ -744,7 +762,9 @@ that soundtrack.
   a span.
 - `synced` holds the spans where the counted windows stay over 0.2, at least
   0.5 s long, ending where the next failing window starts. `diverge_at` is the
-  first counted window at or under 0.2. `cut_at` is the last eighth note
+  first counted window at or under 0.2; a take that ends before the window
+  does, while the window still holds voice, diverges at the take's end at the
+  latest (`missing_tail_s` in the report). `cut_at` is the last eighth note
   (`beats.json`'s beats and the midpoints between them) at or before
   `diverge_at`.
 - Times are song time: `--song-t0` plus the window time (the clip's
@@ -753,7 +773,8 @@ that soundtrack.
   timeline, the NCC curve with the 0.2 line, the divergence in red) and
   `sync-report.json`. The report's `sync` is the take's entry for its clip
   file, `{lag_s, ncc, mode, synced, diverge_at, cut_at}`, and `curve` holds
-  the NCC every 50 ms.
+  the NCC every 50 ms from `curve.t0`, the first measured window's start in
+  song time (later than `--song-t0` when the take starts inside the window).
 - A copy is exit 0:
   `sync: "take-2.mp4" copy, lag 0.31 s, NCC 0.41, synced 1.00 to 3.90, diverges at 4.02, cut at 3.99`.
   A take that does not copy is exit 3, with the report written:
@@ -763,8 +784,8 @@ The tests use recorded bodies (`tests/fixtures/requests/<id>.<provider>.request.
 compared after the key is normalised, the key checked against its own
 SHA-256), the board fixture's clip files with a motion clip and an image slot
 beside them, and the window `film:window` cuts from the test song, with takes
-made from it: the window itself, as a WAV and inside an MP4, 0.3 s late, with
-white noise after 2 s, and noise alone.
+made from it: the window itself, as a WAV and inside an MP4, 0.3 s late, 0.3 s
+early, cut short at 3 s, with white noise after 2 s, and noise alone.
 
 ### The test song
 
@@ -969,6 +990,7 @@ and `model depth is not in "/opt/models" (run ...)`.
 - one line per problem in the clip: `"W01" has no body.prompt` (`start`, `window`, `words`, `body.duration`, `model`),
   `"W01" window is 3.50 s (0.98 to 4.48), want 4 to 8 s`,
   `"W01" words have braces: the lyric goes in plain quotes` (or `prompt has braces`),
+  `"W01" words have a double quote: the kit quotes the lyric`,
   `"W01" prompt has output settings ("720p", "16:9"): they go in the request, never the prompt`,
   `"W01" sung prompt is 120 words, want 110 or fewer`
 - `"W01" was declined on openrouter: no request for it on any provider`
@@ -981,10 +1003,15 @@ and `model depth is not in "/opt/models" (run ...)`.
 - `--delivered needs --file <path>`, `--file goes with --delivered only`, `--file cannot be read`,
   `--figures and --reason go with the rows after asked`, `--figures is not a JSON object`
 - `--ledger must be inside --out (the ledger is appended to)`, `--ledger line 3 is not a ledger row`
-- `--asked is not a request file`, `--asked: key "..." is already in the ledger`,
+- `--asked is not a request file`, `--meta cannot be read`, `--meta is not a request meta file`,
+  `--meta goes with --asked only`,
+  `--asked: the idempotency_key is not the key of the body, provider, model and attempt 2`,
+  `--asked: key "..." is already in the ledger`,
   `--asked: "W01" attempt 1 is stale, the ledger holds 1 asked: shape the request again`,
   `--asked: "M01" was declined on higgsfield: no request for it on any provider`
-- `--polled: key "..." is not in the ledger` (and the other row kinds), `--delivered: key "..." is already delivered`
+- `--polled: key "..." is not in the ledger` (and the other row kinds), `--delivered: key "..." is already delivered`,
+  `--declined: key "..." is already delivered`
+- `--polled: "M01" was declined on higgsfield: the reference is closed` (and `--delivered`, `--failed`)
 
 `film:sync`:
 
