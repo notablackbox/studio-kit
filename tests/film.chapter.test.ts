@@ -1,16 +1,18 @@
-import { before, test } from "node:test";
+import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { film, lines } from "./fixtures/film.ts";
 import { CHAPTER_BOARD, chapterProject, readJson, type ChapterProject } from "./fixtures/chapter.ts";
+import { holdHeavy } from "./fixtures/heavy.ts";
 
 // The chapter engine end to end, in Remotion over headless Chromium: a ten-second chapter of
 // the synthetic song (a still plate, a sung shot on a fake take with two devices, a line across
 // a cut, genuine footage, a 2.5D shot entering on a dither, a design shot with a masthead, the
 // chrome) rendered, gated N/N, flash-clean and history-independent across a cut; a board built
 // to flash fails the flash check; the 9:16 reframe keeps the gate; refusals before any work.
-// All renders of this file run one after another (one browser at a time).
+// All renders of this file run one after another (one browser at a time), and never beside the
+// Teaser's full render in render.test.ts (the heavy lock, held for the whole file).
 
 let p: ChapterProject;
 let rendered: { status: number | null; stdout: string; stderr: string };
@@ -23,10 +25,15 @@ const timed = <T>(name: string, body: () => T): T => {
   return result;
 };
 
+let releaseHeavy = () => {};
+
 before(() => {
+  releaseHeavy = holdHeavy();
   p = chapterProject();
   rendered = timed("film:chapter, ten seconds", () => film("chapter", p.dir, p.args("ch")));
 });
+
+after(() => releaseHeavy());
 
 test("a ten-second chapter renders straight to video, with its tokens sidecar, sound events and report", () => {
   assert.equal(rendered.status, 0, rendered.stdout + rendered.stderr);

@@ -26,6 +26,7 @@ import {
   type TeaserProps,
 } from "../src/remotion/Teaser.tsx";
 import { checkOut, runProcess, validateScript, work, type Runner } from "../src/render.ts";
+import { holdHeavy } from "./fixtures/heavy.ts";
 
 const kitRoot = fileURLToPath(new URL("..", import.meta.url));
 
@@ -574,13 +575,19 @@ function running(pid: number): boolean {
 const REAP_LIMIT_MS = 3000;
 const LATE_SECONDS = 6;
 
+// A pid file is written under a temporary name and renamed into place, so a pid file that
+// exists is always whole: `echo $$ > own.pid` creates the file before it writes, and a kill
+// landing between the two left an empty own.pid that no amount of polling would ever fill.
+function writePid(pid: string, file: string): string {
+  return `echo ${pid} > ${file}.tmp; mv ${file}.tmp ${file}`;
+}
+
+function grandchild(dir: string): string {
+  return `setsid sh -c '${writePid("$$", `${dir}/own.pid`)}; sleep ${LATE_SECONDS}; touch ${dir}/late'`;
+}
+
 function leaver(dir: string): string[] {
-  return [
-    "-c",
-    `setsid sh -c 'echo $$ > ${dir}/own.pid; sleep ${LATE_SECONDS}; touch ${dir}/late' & ` +
-      `sleep 30 & echo $! > ${dir}/bg.pid; ` +
-      "sleep 30",
-  ];
+  return ["-c", `${grandchild(dir)} & sleep 30 & ${writePid("$!", `${dir}/bg.pid`)}; sleep 30`];
 }
 
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
@@ -645,12 +652,13 @@ test("a child that starts a new-session grandchild and exits at once leaves noth
   const started = Date.now();
   const result = await runProcess(
     "sh",
-    ["-c", `setsid sh -c 'echo $$ > ${dir}/own.pid; sleep ${LATE_SECONDS}; touch ${dir}/late' & exit 0`],
+    ["-c", `${grandchild(dir)} & exit 0`],
     { timeoutMs: 30_000 },
   );
   assert.equal(result.timedOut, false);
   assert.equal(result.status, 0);
-  // The grandchild may have been killed before it wrote its pid; if it wrote one, it is gone.
+  // The grandchild may have been killed before it wrote its pid (then own.pid is absent, never
+  // empty: it is renamed into place whole); if it wrote one, it is gone.
   if (existsSync(join(dir, "own.pid"))) {
     const pid = await pidFrom(join(dir, "own.pid"));
     assert.equal(running(pid), false, `grandchild ${pid} survived`);
@@ -673,6 +681,8 @@ test(
   "three whole 15 second clips render a master, a 4:5 reframe and a poster, measured in the report",
   { timeout: 20 * 60 * 1000 },
   (t) => {
+    // Never beside the film chapter renders: see tests/fixtures/heavy.ts.
+    t.after(holdHeavy());
     const ws = workspace();
     const shotlist = join(ws.dir, "shotlist.json");
     writeFileSync(
