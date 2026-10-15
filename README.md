@@ -1041,9 +1041,13 @@ sound events (`[{t, kind, gain, shot, what}]`: a device's entrance is a `tick`,
 ffprobe's duration, size, size in pixels, rate and colour tags:
 `chapter: "ch01" 240 frames (10.000 s, 1920x1080, 24 fps, 2400395 bytes), 12 sung words drawn, 3 sound events`.
 Everything the chapter needs is checked before any work (exit 2). The three
-outputs go together: an earlier run's video and both sidecars in `--out` are
-removed before rendering and again when the render fails (exit 1), so a failed
-run never leaves a stale sidecar beside a missing or new video. On the test
+outputs go together: once the flags, the board, the edit list and the analysis
+are checked (those refusals remove nothing), an earlier run's video and both
+sidecars in `--out` are removed before staging and again when the render fails
+(exit 1). Staging probes the takes and the footage and cuts the 2.5D layers, so
+a corrupt take refused there (exit 2, `"clips/W01/take-2.mp4" cannot be read as a video`)
+also leaves none of the three, and a failed run never leaves a stale sidecar
+beside a missing or new video. On the test
 chapter a ten-second render takes about 10 s on 4 CPUs.
 
 `film:gate` (toolkit item 19) reads the sidecar: every sung word whose start

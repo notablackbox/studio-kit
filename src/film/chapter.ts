@@ -21,8 +21,10 @@ export async function renderChapter(command: string, report: string, values: Cha
   const { out, chapter } = prepared;
   const suffix = vertical ? ".9x16" : "";
   const names = { video: `${chapter}${suffix}.mp4`, tokens: `${chapter}${suffix}.tokens.json`, audio: `${chapter}${suffix}.audio.json` };
-  // The three outputs go together: an earlier run's are removed before rendering and again on any
-  // failure, so a failed run never leaves a video beside sidecars (or sidecars alone) from before.
+  // The three outputs go together: once the inputs are checked (prepareChapter's refusals remove
+  // nothing), an earlier run's are removed before staging and again on any failure, so a failed
+  // run, a staging refusal among them, never leaves a video beside sidecars (or sidecars alone)
+  // from before.
   const clear = () => {
     for (const name of Object.values(names)) {
       try {
@@ -33,11 +35,11 @@ export async function renderChapter(command: string, report: string, values: Cha
     }
   };
   const started = Date.now();
+  clear();
   const stage = await stageChapter(prepared);
   try {
     const [a, b] = prepared.frames;
     const composition = vertical ? "FilmChapterVertical" : "FilmChapter";
-    clear();
     await remotion(`rendering ${composition}`, [
       "render", ENTRY, composition, join(out, names.video),
       `--props=${stage.propsFile}`, `--public-dir=${stage.publicDir}`,

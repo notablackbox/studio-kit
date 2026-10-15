@@ -214,6 +214,22 @@ test("a failing render after a good one in the same --out leaves none of the thr
   for (const f of outputs) assert.equal(existsSync(join(p.dir, "rerun", f)), false, `${f} is left from the good run`);
 });
 
+test("a staging failure after a good render in the same --out leaves none of the three outputs", () => {
+  const good = film("chapter", p.dir, [...p.args("restage"), "--range", "0:0.2"]);
+  assert.equal(good.status, 0, good.stdout + good.stderr);
+  const outputs = ["ch01.mp4", "ch01.tokens.json", "ch01.audio.json"];
+  for (const f of outputs) assert.ok(existsSync(join(p.dir, "restage", f)), f);
+  // The chapter's take is not a video: staging probes it and refuses, before any render.
+  cpSync(join(p.dir, "clips"), join(p.dir, "junk-clips"), { recursive: true });
+  writeFileSync(join(p.dir, "junk-clips", "W01", "take-2.mp4"), "not a video");
+  const args = p.args("restage", ["--range", "0:0.2"]).map((a, k, all) => (all[k - 1] === "--clips" ? "junk-clips" : a));
+  const failed = film("chapter", p.dir, args);
+  assert.equal(failed.status, 2, failed.stdout + failed.stderr);
+  assert.equal(lines(failed.stdout).length, 1);
+  assert.match(lines(failed.stdout)[0], /take-2\.mp4" cannot be read as a video$/);
+  for (const f of outputs) assert.equal(existsSync(join(p.dir, "restage", f)), false, `${f} is left from the good run`);
+});
+
 test("a render that cannot be written exits 1 with one line on stderr", () => {
   mkdirSync(join(p.dir, "blocked", "ch01.mp4"), { recursive: true });
   writeFileSync(join(p.dir, "blocked", "ch01.mp4", "keep"), "");
