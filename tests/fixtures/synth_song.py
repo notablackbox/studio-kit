@@ -1,6 +1,10 @@
 """The synthetic song the film tests listen to, with exact ground truth.
 
-    python3 -I tests/fixtures/synth_song.py --out <dir> [--lyrics <lyrics.txt>]
+    python3 -I tests/fixtures/synth_song.py --out <dir> [--lyrics <lyrics.txt>] [--hats-only 2,3]
+
+--hats-only drops the kick and the snare from those bars (counted from 0) and keeps their
+hats; the truth then lists only the drums played, and the bars as `hats_only_bars`. Without
+it the song is exactly as before.
 
 Writes into --out:
 - song.wav: 16-bit 44.1 kHz stereo, 12.0 s: the vocals over the drums, sample for sample the
@@ -164,7 +168,7 @@ def espeak_version() -> str:
     return match.group(0) if match else out.strip()
 
 
-def build(out: Path, lyrics: str, display: str) -> dict:
+def build(out: Path, lyrics: str, display: str, hats_only=frozenset()) -> dict:
     sections, lines = parse_sheet(lyrics)
     display_lines = [l.split() for l in display.splitlines() if l.strip()]
     if len(display_lines) != len(lines) or any(len(d) != len(l["words"]) for d, l in zip(display_lines, lines)):
@@ -180,7 +184,9 @@ def build(out: Path, lyrics: str, display: str) -> dict:
     drums = np.zeros(SAMPLES)
     kicks, snares, hats = [], [], []
     for k, at in enumerate(beats):
-        if k % 2 == 0:
+        if k // 4 in hats_only:
+            pass  # a hat-only bar: no kick, no snare
+        elif k % 2 == 0:
             place(drums, kick, at)
             kicks.append(at)
         else:
@@ -281,6 +287,8 @@ def build(out: Path, lyrics: str, display: str) -> dict:
         "lines": line_truth,
         "words": words,
     }
+    if hats_only:
+        truth["hats_only_bars"] = sorted(hats_only)
     (out / "truth.json").write_text(json.dumps(truth, indent=2) + "\n", encoding="utf-8")
     return truth
 
@@ -289,13 +297,18 @@ def main(argv) -> int:
     parser = argparse.ArgumentParser(description="Build the synthetic test song.")
     parser.add_argument("--out", required=True)
     parser.add_argument("--lyrics", help="a lyric sheet of two [sections] of lower-case words; display.txt then capitalises each line")
+    parser.add_argument("--hats-only", default="", help="bars (from 0, comma separated) that keep their hats but lose kick and snare")
     args = parser.parse_args(argv)
+    try:
+        hats_only = frozenset(int(b) for b in args.hats_only.split(",") if b.strip())
+    except ValueError:
+        raise SystemExit("--hats-only wants bar numbers, comma separated")
     lyrics, display = LYRICS, DISPLAY
     if args.lyrics:
         lyrics = Path(args.lyrics).read_text(encoding="utf-8")
         _, lines = parse_sheet(lyrics)
         display = "".join(l["text"][:1].upper() + l["text"][1:] + "\n" for l in lines)
-    truth = build(Path(args.out), lyrics, display)
+    truth = build(Path(args.out), lyrics, display, hats_only)
     print(f"synthetic song: {len(truth['words'])} words, {len(truth['beats'])} beats, {truth['duration']} s")
     return 0
 

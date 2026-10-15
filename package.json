@@ -11,6 +11,11 @@
     "changelog": "tsx src/changelog.ts",
     "film:status": "tsx src/film/status.ts",
     "film:score": "tsx src/film/score.ts",
+    "film:stems": "tsx src/film/stems.ts",
+    "film:beats": "tsx src/film/beats.ts",
+    "film:words": "tsx src/film/words.ts",
+    "film:hits": "tsx src/film/hits.ts",
+    "film:window": "tsx src/film/window.ts",
     "test": "node --import tsx --test tests/*.test.ts"
   },
   "dependencies": {

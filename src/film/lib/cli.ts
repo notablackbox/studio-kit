@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { chmodSync, lstatSync, mkdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, chmodSync, constants, lstatSync, mkdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -103,8 +103,9 @@ export function outProblem(out: string): string | null {
 // Writes a file in a folder without following a symlink at its name: the text goes to a fresh
 // name first (opened exclusively), then is renamed over the final name, which replaces a link
 // rather than writing through it. The folder is made if it is not there. `mode`, when given,
-// is the new file's permission bits (to keep those of the file it replaces).
-export function writeIn(folder: string, name: string, text: string, mode?: number): string {
+// is the new file's permission bits (to keep those of the file it replaces). `text` may be
+// bytes (a WAV, an MP3).
+export function writeIn(folder: string, name: string, text: string | Uint8Array, mode?: number): string {
   mkdirSync(folder, { recursive: true });
   const target = join(folder, name);
   const temp = join(folder, `.${name}.${randomUUID()}.tmp`);
@@ -116,6 +117,19 @@ export function writeIn(folder: string, name: string, text: string, mode?: numbe
     rmSync(temp, { force: true });
   }
   return target;
+}
+
+// A path flag that must name a readable file: refused with `<flag> cannot be read` otherwise.
+export function requireFile(path: string, flag: string): string {
+  try {
+    if (statSync(path).isFile()) {
+      accessSync(path, constants.R_OK);
+      return path;
+    }
+  } catch {
+    // refused below
+  }
+  throw new Refused([`${flag} cannot be read`]);
 }
 
 export type Report = { ok: boolean; inputs: Record<string, unknown>; outputs: Record<string, unknown>; [key: string]: unknown };
