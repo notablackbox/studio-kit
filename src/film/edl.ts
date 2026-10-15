@@ -7,8 +7,8 @@ import { KEY, readBoard, type Shot } from "./lib/board.ts";
 // Every shot resolves to its sources, keyed by shot id:
 // - a sung or motion shot plays its clip's delivered take (the latest `n`) from its start, at
 //   clip time `in = t0 - song_t0 + lag_s` (lag 0 when the take has no sync). A sung take whose
-//   shot runs past its in-sync spans is cut at the take's `cut_at` to its first cover, which
-//   plays from there by its own song_t0 and lag, and so on down the chain;
+//   shot runs past the take's `cut_at` (its first divergence) is cut there to its first cover,
+//   which plays from there by its own song_t0 and lag, and so on down the chain;
 // - a hole (a clip or cover with no delivered take with a file, a sung take that diverges with
 //   no cover, or one whose cut is at or before its own start: out of sync) is filled from the
 //   shot's plate, with a note in the report;
@@ -134,10 +134,11 @@ function resolve(shot: Shot, clips: Map<string, Clip | null>): Resolved {
     const clip = clips.get(id) ?? null;
     const take = delivered(clip);
     if (!take || !clip) return hole(id, t, "no take", `clip ${shown(id)} has no delivered take`);
-    // A sung take is cut where it diverges, when the shot runs past its in-sync spans.
+    // A sung take is cut at its first divergence (`cut_at`) whenever the shot runs past it, even
+    // when the shot ends inside a later in-sync span: the out-of-sync stretch between the spans
+    // would otherwise play.
     const sync = take.sync;
-    const syncedEnd = sync && sync.synced.length > 0 ? Math.max(...sync.synced.map((s) => s[1])) : null;
-    const cut = shot.motion_tier === "sung" && sync && sync.cut_at !== null && syncedEnd !== null && shot.t1 > syncedEnd + EPS ? sync.cut_at : null;
+    const cut = shot.motion_tier === "sung" && sync && sync.cut_at !== null && shot.t1 > sync.cut_at + EPS ? sync.cut_at : null;
     // Cut at or before its own start: nothing of the take is in sync here.
     if (cut !== null && cut <= t + EPS) return hole(clip.id, t, "out of sync", `clip ${shown(clip.id)} is out of sync from ${t.toFixed(3)} s`);
     const lag = sync?.lag_s ?? 0;

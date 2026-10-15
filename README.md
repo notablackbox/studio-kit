@@ -680,9 +680,10 @@ later than the shot's start) plays its plate until its first frame falls due,
 then the take from `in: 0`: `{segs: [{t0: 0.976, plate}, {t0: 1.176, clip, in: 0}, ...]}`,
 noted as a `late start` fallback. A late start of one frame or less (a lag one
 sync hop off) snaps to the take's first frame with no note. A sung take
-whose shot runs past its `sync.synced` spans is cut at its `sync.cut_at` to its
-first cover, which plays from there by its own `song_t0` and lag, down the
-chain. A `genuine` shot with `footage` is `{footage: "<file>"}` (the file the
+whose shot runs past its `sync.cut_at` (the take's first divergence) is cut
+there to its first cover, which plays from there by its own `song_t0` and lag,
+down the chain; this holds even when the shot ends inside a later
+`sync.synced` span, so the out-of-sync stretch between two spans never plays. A `genuine` shot with `footage` is `{footage: "<file>"}` (the file the
 walk or a terminal capture recorded; the chapter engine plays it like a clip;
 a footage value that is not a plain file name, with a slash or `..`, fails with
 exit 3: `edl: "s003" footage "../x.webm" is not a plain file name`);

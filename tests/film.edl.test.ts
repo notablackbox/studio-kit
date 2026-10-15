@@ -217,6 +217,33 @@ test("a take that starts late (a negative in) plays from its first frame after a
   assert.equal(existsSync(join(dir, "late-noplate", "edl.json")), false);
 });
 
+test("a take is cut at its first divergence, even when the shot ends inside a later in-sync span", () => {
+  // W01's take is in sync from 1.0 to 2.0 s, out of sync until 3.0 s, in sync again to 5.0 s;
+  // its cut is 2.0. The shot ends at 4.5 s, inside the second span: the take still stops at 2.0
+  // and the cover plays from there (its window starts at 1.9: in = 2.0 - 1.9 + 0.2).
+  const clips = clipsCopy("clips-split", (folder) => {
+    const w01 = JSON.parse(readFileSync(join(folder, "W01.json"), "utf8"));
+    w01.takes[1].sync.synced = [[1.0, 2.0], [3.0, 5.0]];
+    w01.takes[1].sync.cut_at = 2.0;
+    writeFileSync(join(folder, "W01.json"), JSON.stringify(w01));
+    const c1 = JSON.parse(readFileSync(join(folder, "W01-c1.json"), "utf8"));
+    c1.song_t0 = 1.9;
+    writeFileSync(join(folder, "W01-c1.json"), JSON.stringify(c1));
+  });
+  const board = changedBoard(dir, "split.json", (_b, shot) => {
+    shot("s002").t1 = 4.5;
+    shot("s003").t0 = 4.5;
+  });
+  const result = film("edl", dir, ARGS(board, clips, "split"));
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.deepEqual(read("split").s002, {
+    segs: [
+      { t0: 0.976, clip: "W01-t2", in: 0.31 },
+      { t0: 2, clip: "W01-c1-t1", in: 0.3 },
+    ],
+  });
+});
+
 test("refusals: one line each on stdout, exit 2, nothing written", () => {
   writeFileSync(join(dir, "afile"), "x");
   const broken = clipsCopy("clips-broken", (folder) => writeFileSync(join(folder, "W02.json"), '{"id": "W02", "takes": "none"}'));
