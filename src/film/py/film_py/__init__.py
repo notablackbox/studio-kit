@@ -10,9 +10,12 @@ kit's own `src/film/py` folder first on the path. The protocol, shared by every 
 This file imports nothing heavy: `film:score` loads it without torch.
 """
 
+import contextlib
 import json
+import logging
 import os
 import sys
+import warnings
 from pathlib import Path
 from typing import NoReturn
 
@@ -57,7 +60,8 @@ def model(key: str) -> Path:
     try:
         manifest = json.loads((root / MANIFEST).read_text(encoding="utf-8"))
         entry = manifest["models"][key]
-        if entry.get("status") != "ok":
+        # ok: downloaded by this run of models.py; present: found already in place by a later run.
+        if entry.get("status") not in ("ok", "present"):
             raise KeyError(key)
         path = root / entry["path"]
         if not path.exists():
@@ -69,6 +73,55 @@ def model(key: str) -> Path:
     return path
 
 
+def spec(argv) -> dict:
+    """The JSON spec a listening module works from: the one argument, else stdin."""
+    try:
+        text = argv[0] if argv else sys.stdin.read()
+        value = json.loads(text)
+        if not isinstance(value, dict):
+            raise ValueError("not an object")
+    except (ValueError, IndexError):
+        refuse(["the spec is not a JSON object"])
+    return value
+
+
+@contextlib.contextmanager
+def quiet():
+    """Keeps the libraries' chatter off stdout while the work runs, so stdout holds only the result.
+
+    Python's own prints and anything a C library writes to file descriptor 1 go to stderr; the
+    libraries' loggers and warnings are silenced. stdout is put back when the block ends.
+    """
+    logging.disable(logging.WARNING)
+    sys.stdout.flush()
+    saved = os.dup(1)
+    os.dup2(2, 1)
+    try:
+        with warnings.catch_warnings(), contextlib.redirect_stdout(sys.stderr):
+            warnings.simplefilter("ignore")
+            yield
+    finally:
+        sys.stderr.flush()
+        os.dup2(saved, 1)
+        os.close(saved)
+        logging.disable(logging.NOTSET)
+
+
+def threads() -> int:
+    """The CPUs this process may use: the cgroup's quota when one is set, else the affinity mask."""
+    try:
+        count = len(os.sched_getaffinity(0))
+    except AttributeError:
+        count = os.cpu_count() or 1
+    try:
+        quota, period = Path("/sys/fs/cgroup/cpu.max").read_text(encoding="ascii").split()[:2]
+        if quota != "max":
+            count = min(count, max(1, int(int(quota) / int(period))))
+    except (OSError, ValueError):
+        pass
+    return max(1, count)
+
+
 def offline(root: Path) -> None:
     """Points torch hub and the Hugging Face cache at the downloaded models and forbids downloads."""
     os.environ["HF_HOME"] = str(root / "hf")
@@ -78,3 +131,4 @@ def offline(root: Path) -> None:
     import torch  # noqa: PLC0415  (heavy; only the commands that need it pay for it)
 
     torch.hub.set_dir(str(root / "torch" / "hub"))
+    torch.set_num_threads(threads())

@@ -90,6 +90,38 @@ test("a manifest entry whose files are gone is not trusted", () => {
   assert.equal(manifest(dest).models.depth.status, "missing");
 });
 
+// film_py.model() as a command calls it, with FILM_MODELS pointing at `dest`.
+function loadModel(dest: string, key: string) {
+  return spawnSync(
+    "python3",
+    ["-I", "-B", "-c", `import sys; sys.path.insert(0, 'src/film/py'); from film_py import model; print(model(${JSON.stringify(key)}).name)`],
+    { cwd: kitRoot, encoding: "utf8", env: { ...process.env, FILM_MODELS: dest } },
+  );
+}
+
+test("a model models.py found already in place (present) is loaded, not refused", () => {
+  const dest = tempDir();
+  fakeDepth(dest);
+  assert.equal(models(dest, "depth").status, 0);
+  // The second run finds the entry intact and marks it present.
+  assert.equal(models(dest, "depth").status, 0);
+  assert.equal(manifest(dest).models.depth.status, "present");
+  const result = loadModel(dest, "depth");
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.deepEqual(lines(result.stdout), ["depth-anything-v2-small"]);
+});
+
+test("a manifest entry neither ok nor present is refused", () => {
+  const dest = tempDir();
+  fakeDepth(dest);
+  assert.equal(models(dest, "depth").status, 0);
+  const text = readFileSync(join(dest, "models.json"), "utf8").replace('"status": "present"', '"status": "stale"');
+  writeFileSync(join(dest, "models.json"), text);
+  const result = loadModel(dest, "depth");
+  assert.equal(result.status, 2, result.stdout + result.stderr);
+  assert.match(lines(result.stdout)[0], /^model depth is not in /);
+});
+
 test("a command needing an absent model refuses with one line, the folder JSON-quoted", () => {
   const dest = join(tempDir(), "no\nmodels");
   const result = spawnSync(
