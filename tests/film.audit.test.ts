@@ -519,7 +519,10 @@ test("a malformed board is refused: exit 2, one line per problem, nothing writte
     [(_b, s) => (s[2].id = "S3"), ['--board: shots[2].id is "S3", want s and three digits (s001)']],
     [(_b, s) => ((s[3].type as Record<string, unknown>[])[0].mode = "karaoke"), ['--board: shots[3].type[0].mode is "karaoke", want one of subtitle, coverline, masthead, stack, mass']],
     [(_b, s) => ((s[3].devices as Record<string, unknown>[])[0].kind = "clipart"), ['--board: shots[3].devices[0].kind is "clipart", want one of counter, label, terminal, chart, strike, spec-sheet']],
-    [(_b, s) => (s[4].treatment = "zoom"), ['--board: shots[4].treatment is "zoom", want one of push, drift, parallax-left, parallax-right, rise, settle, or null']],
+    // A mistyped anchor slot, named with its shot; an anchor of neither shape.
+    [(_b, s) => ((s[1].devices as Record<string, unknown>[])[0].anchor = { slot: "rigth" }), ['--board: shots[1].devices[0].anchor.slot is "rigth", want one of left, right, top, top-left, top-right, bottom, bottom-left, bottom-right, centre, center (shot "s002")']],
+    [(_b, s) => ((s[1].devices as Record<string, unknown>[])[0].anchor = { x: 10 }), ['--board: shots[1].devices[0].anchor is {"x":10}, want a slot (left, right, top, top-left, top-right, bottom, bottom-left, bottom-right, centre, center) or {x, y} in percent (shot "s002")']],
+    [(_b, s) => (s[4].treatment = "zoom"),['--board: shots[4].treatment is "zoom", want one of push, drift, parallax-left, parallax-right, rise, settle, or null']],
     [(_b, s) => (s[4].plate = "../p-roof"), ['--board: shots[4].plate is "../p-roof", want a key of letters, digits, dot, dash or underscore, or null']],
     [(b) => ((b.chapters as Record<string, unknown>[])[0].box = 7), ["--board: chapters[0].box is 7, want a short text (at most 60 characters)"]],
     // A chapter id names files (<chapter>.mp4): a plain key, used once.

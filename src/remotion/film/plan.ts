@@ -19,9 +19,13 @@ export const MAX_ACCENTS = 2; // the accent on at most two elements per frame
 
 export const TYPE_MODES = ["subtitle", "coverline", "masthead", "stack", "mass"] as const;
 export const DEVICE_KINDS = ["counter", "label", "terminal", "chart", "strike", "spec-sheet"] as const;
+// The named slots a device's anchor can take (devices/index.tsx places them; `center` is
+// `centre`'s other spelling). The one list: the plan and the board check refuse any other.
+export const DEVICE_SLOTS = ["left", "right", "top", "top-left", "top-right", "bottom", "bottom-left", "bottom-right", "centre", "center"] as const;
 export const TREATMENTS = ["push", "drift", "parallax-left", "parallax-right", "rise", "settle"] as const;
 export type TypeMode = (typeof TYPE_MODES)[number];
 export type DeviceKind = (typeof DEVICE_KINDS)[number];
+export type DeviceSlot = (typeof DEVICE_SLOTS)[number];
 export type Treatment = (typeof TREATMENTS)[number];
 export type Mark = "accent" | "strike" | "mono" | null;
 
@@ -434,7 +438,16 @@ export function buildPlan(input: PlanInputs): { plan: Plan | null; problems: str
       else if (key === "T") at = num(params.at) ?? ref;
       at = Math.max(at, t0);
       const a = d.anchor;
-      const anchor: Anchor = isObj(a) && num(a.x) !== null && num(a.y) !== null ? { x: num(a.x) as number, y: num(a.y) as number } : { slot: (isObj(a) ? str(a.slot) : str(a)) ?? "right" };
+      let anchor: Anchor;
+      if (isObj(a) && num(a.x) !== null && num(a.y) !== null) anchor = { x: num(a.x) as number, y: num(a.y) as number };
+      else {
+        const slot = a === undefined || a === null ? "right" : isObj(a) ? a.slot : a;
+        if (typeof slot !== "string" || !(DEVICE_SLOTS as readonly string[]).includes(slot)) {
+          report(`--board: ${q(id)} devices[${n}] anchor ${isObj(a) && "slot" in a ? `slot ${q(slot)}` : q(a)} is not a slot (${DEVICE_SLOTS.join(", ")}) or {x, y}`);
+          return;
+        }
+        anchor = { slot };
+      }
       devices.push({ kind, key, at: r4(at), from: Math.max(from, frameAt(at)), to, anchor, params, line });
     });
 

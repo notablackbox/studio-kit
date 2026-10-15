@@ -1,6 +1,6 @@
 import type { CSSProperties, ReactNode } from "react";
 import type { FilmLook } from "../look.ts";
-import type { DrawnDevice } from "../plan.ts";
+import type { DeviceSlot, DrawnDevice } from "../plan.ts";
 import { Chart } from "./Chart.tsx";
 import { Counter } from "./Counter.tsx";
 import { Label } from "./Label.tsx";
@@ -8,8 +8,8 @@ import { SpecSheet } from "./SpecSheet.tsx";
 import { Strike } from "./Strike.tsx";
 import { Terminal } from "./Terminal.tsx";
 
-// The six devices of R4, placed by their anchors: a named slot (left, right, top, bottom,
-// centre, and the four corners) where devices of one slot stack in board order, or `{x, y}`
+// The six devices of R4, placed by their anchors: a named slot (plan.ts's DEVICE_SLOTS: left,
+// right, top, bottom, centre, and the four corners) where devices of one slot stack in board order, or `{x, y}`
 // in percent of the frame. In 9:16 every device stacks in the band above the picture.
 
 function one(device: DrawnDevice, look: FilmLook): ReactNode {
@@ -24,7 +24,7 @@ function one(device: DrawnDevice, look: FilmLook): ReactNode {
 
 // The named slots share four columns, so devices never land on one another: the left and the
 // right column (from under the chrome down), and the two bottom corners above the lyric band.
-const COLUMN: Record<string, string> = { left: "left", top: "left", "top-left": "left", right: "right", "top-right": "right" };
+const COLUMN: Partial<Record<DeviceSlot, DeviceSlot>> = { left: "left", top: "left", "top-left": "left", right: "right", "top-right": "right" };
 
 function slotStyle(slot: string, look: FilmLook): CSSProperties {
   const { margin, width } = look;
@@ -62,7 +62,7 @@ export function Devices({ devices, look, scale = 1 }: { devices: DrawnDevice[]; 
   const placed: ReactNode[] = [];
   for (const d of devices) {
     if ("slot" in d.anchor) {
-      const column = COLUMN[d.anchor.slot] ?? d.anchor.slot;
+      const column = COLUMN[d.anchor.slot as DeviceSlot] ?? d.anchor.slot;
       const list = slots.get(column) ?? [];
       list.push(d);
       slots.set(column, list);

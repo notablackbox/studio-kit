@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { Refused, shown } from "./cli.ts";
+import { DEVICE_SLOTS } from "../../remotion/film/plan.ts";
 
 // The board, `shots.json`, in claudia.gallery's formats (wiki/formats, "The board"), with the
 // kit's v0.2.0 additions: a shot's `genuine` and `footage` (real product footage, checked
@@ -140,6 +141,17 @@ export function boardProblems(raw: unknown): string[] {
             if (!(DEVICE_KEYS as readonly unknown[]).includes(entry.key)) bad(`${p}.key`, entry.key, oneOf(DEVICE_KEYS));
             if (entry.line != null && !isIndex(entry.line)) bad(`${p}.line`, entry.line, "a line number or null");
             if ("params" in entry && !isObject(entry.params)) bad(`${p}.params`, entry.params, "an object");
+            if ("anchor" in entry && entry.anchor !== null) {
+              const a = entry.anchor;
+              const xy = isObject(a) && isNumber(a.x) && isNumber(a.y);
+              const slot = isObject(a) ? a.slot : a;
+              const named = typeof slot === "string" && (DEVICE_SLOTS as readonly string[]).includes(slot);
+              const where = typeof shot.id === "string" ? ` (shot ${shown(shot.id)})` : "";
+              if (!xy && !named) {
+                if (isObject(a) && "slot" in a) bad(`${p}.anchor.slot`, slot, `${oneOf(DEVICE_SLOTS)}${where}`);
+                else bad(`${p}.anchor`, a, `a slot (${DEVICE_SLOTS.join(", ")}) or {x, y} in percent${where}`);
+              }
+            }
           });
       }
     });

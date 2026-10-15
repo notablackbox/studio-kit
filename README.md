@@ -611,7 +611,11 @@ shot id that is not `s` and three digits, or is used twice; `t0` not before
 `t1`; a value outside its list (`framing` ECU, CU, MCU, MS, MWS, WS, FS, EWS,
 OTS; `motion_tier` still, plate3d, motion, sung; a type's `mode` subtitle,
 coverline, masthead, stack, mass; a device's `kind` counter, label, terminal,
-chart, strike, spec-sheet and `key` W, B, H, F, T; `treatment` push, drift,
+chart, strike, spec-sheet and `key` W, B, H, F, T; a device's `anchor` a
+slot from the anchor list below or `{x, y}`, so a mistyped slot is refused
+with its shot named:
+`shots[1].devices[0].anchor.slot is "rigth", want one of left, right, ... (shot "s002")`;
+`treatment` push, drift,
 parallax-left, parallax-right, rise, settle or null; `transition_in` cut or
 dither); a plate key, clip id or chapter id that is not letters, digits, `.`,
 `-` and `_` (it names a file: a chapter id names `<chapter>.mp4` and its
@@ -966,8 +970,10 @@ clock, no state kept between frames (the history check proves it).
   `params.at`, and runs to the shot's end. The sixteenths are the beat map's
   beats, eighths and the eighths' midpoints. Anchors are a slot (`left`,
   `right`, `top`, `top-left`, `top-right`, `bottom`, `bottom-left`,
-  `bottom-right`, `centre`; the slots share a left and a right column, where
-  devices stack in board order) or `{x, y}` in percent. In 9:16 a shot's
+  `bottom-right`, `centre` or `center`, one list, `DEVICE_SLOTS` in
+  `plan.ts`, that the renderer places and the plan and the board check
+  refuse any other name against; the slots share a left and a right column, where
+  devices stack in board order) or `{x, y}` in percent; no anchor is `right`. In 9:16 a shot's
   devices stack in the band above the picture, stepped down together to fit
   (never clipped); a set that would shrink under 60 percent is refused.
 - **Colour.** Colours come from the brand's `palette.json` only: `black`,
@@ -1480,7 +1486,8 @@ and `model depth is not in "/opt/models" (run ...)`.
   `--board: "s006" type[0] masthead "..." does not fit two lines at 97 px (9:16)`,
   `--board: "s002" type[0] subtitle "..." does not fit two lines at 36 px (16:9)`,
   `--board: "s006" type[0] stack token "..." does not fit one line at 56 px (16:9)`,
-  `--board: "s002" devices need 1216 px above the 9:16 picture, the band has 518 (they would shrink under 60 percent)`
+  `--board: "s002" devices need 1216 px above the 9:16 picture, the band has 518 (they would shrink under 60 percent)`,
+  `--board: "s002" devices[0] anchor slot "rigth" is not a slot (left, right, ...) or {x, y}`
 - `film:reframe`: `--aspect is "4:5", want 9:16`; `film:history`: `--frames is "60", want A,B (two frames of the chapter)`,
   `--frames "60,999": chapter "ch01" has frames 0 to 239`, `--frames "60,60": A and B must differ`,
   `film:history: --range is not used here; name the two frames with --frames A,B`,

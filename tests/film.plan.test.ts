@@ -278,6 +278,20 @@ test("9:16: a shot's devices step down together to fit the band above the pictur
   assert.deepEqual(problemsOf(board, { vertical: true }), ['--board: "s002" devices need 1216 px above the 9:16 picture, the band has 518 (they would shrink under 60 percent)']);
 });
 
+test("a device anchor slot not in the slot list is refused, naming the slot and the shot", () => {
+  const board = structuredClone(CHAPTER_BOARD) as typeof CHAPTER_BOARD;
+  (board.shots[1].devices[0] as { anchor: unknown }).anchor = { slot: "rigth" };
+  const slots = "left, right, top, top-left, top-right, bottom, bottom-left, bottom-right, centre, center";
+  assert.deepEqual(problemsOf(board), [`--board: "s002" devices[0] anchor slot "rigth" is not a slot (${slots}) or {x, y}`]);
+  (board.shots[1].devices[0] as { anchor: unknown }).anchor = "rigth";
+  assert.deepEqual(problemsOf(board), [`--board: "s002" devices[0] anchor "rigth" is not a slot (${slots}) or {x, y}`]);
+  // Every listed slot, a bare slot name, {x, y} and no anchor at all are fine.
+  for (const anchor of [...slots.split(", ").map((slot) => ({ slot })), "left", { x: 10, y: 20 }, undefined]) {
+    (board.shots[1].devices[0] as { anchor: unknown }).anchor = anchor;
+    assert.deepEqual(problemsOf(board), [], JSON.stringify(anchor));
+  }
+});
+
 test("the fit check measures the text drawn: an entry with no text of its own is fitted on its display line", () => {
   const board = structuredClone(CHAPTER_BOARD) as typeof CHAPTER_BOARD;
   board.shots[5].type[0].text = "";
