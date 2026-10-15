@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import {
   EXIT,
@@ -151,8 +151,10 @@ async function main(): Promise<number> {
   const file = fromCaller(values.status);
   const out = values.out ? fromCaller(values.out) : dirname(file);
   let raw: unknown;
+  let original = "";
   try {
-    raw = JSON.parse(readFileSync(file, "utf8"));
+    original = readFileSync(file, "utf8");
+    raw = JSON.parse(original);
   } catch {
     throw new Refused(["status file cannot be read as JSON"]);
   }
@@ -169,14 +171,28 @@ async function main(): Promise<number> {
     const next = validateStatus({ ...status, ...set, updated_at: updated });
     if (!next.status) throw new Refused([next.problem!]);
     status = next.status;
-    writeIn(dirname(file), basename(file), JSON.stringify(status, null, 2) + "\n");
   }
-  writeReport(out, "status", {
-    ok: true,
-    inputs: { status: file, set },
-    outputs: { status: changing ? file : null, report: "status-report.json" },
-    status,
-  });
+  const report = () =>
+    writeReport(out, "status", {
+      ok: true,
+      inputs: { status: file, set },
+      outputs: { status: changing ? file : null, report: "status-report.json" },
+      status,
+    });
+  if (!changing) {
+    report();
+  } else {
+    // The new file keeps the old one's permissions. Should the report then fail, the old text
+    // is put back, so an exit 1 never leaves a changed status.json behind.
+    const mode = statSync(file).mode & 0o7777;
+    writeIn(dirname(file), basename(file), JSON.stringify(status, null, 2) + "\n", mode);
+    try {
+      report();
+    } catch (error) {
+      writeIn(dirname(file), basename(file), original, mode);
+      throw error;
+    }
+  }
   console.log(printable(JSON.stringify(status, null, 2)));
   return EXIT.done;
 }

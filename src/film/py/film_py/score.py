@@ -56,13 +56,19 @@ def load_dictionary():
     return cmudict.dict()
 
 
+SPOKEN_WORDS = frozenset("spoken spoke speak speaks speaking rap raps rapped rapping".split())
+CHANT_WORDS = frozenset("chant chants chanted chanting shout shouts shouted shouting".split())
+SUNG_WORDS = frozenset("sung sing sings singing".split())
+
+
 def delivery_of(cue: str, name: str) -> str:
-    text = cue.lower()
-    if "spoken" in text or "spoke" in text or "rap" in text.split():
+    """The delivery a cue names, by whole words ("rising" is not "sing", "rap," is "rap")."""
+    words = set(re.findall(r"[a-z]+", cue.lower()))
+    if words & SPOKEN_WORDS:
         return "spoken"
-    if "chant" in text or "shout" in text:
+    if words & CHANT_WORDS:
         return "chant"
-    if "sung" in text or "sing" in text:
+    if words & SUNG_WORDS:
         return "sung"
     return "spoken" if name.lower().startswith("verse") else "sung"
 

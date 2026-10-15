@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { lstatSync, mkdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -102,13 +102,15 @@ export function outProblem(out: string): string | null {
 
 // Writes a file in a folder without following a symlink at its name: the text goes to a fresh
 // name first (opened exclusively), then is renamed over the final name, which replaces a link
-// rather than writing through it. The folder is made if it is not there.
-export function writeIn(folder: string, name: string, text: string): string {
+// rather than writing through it. The folder is made if it is not there. `mode`, when given,
+// is the new file's permission bits (to keep those of the file it replaces).
+export function writeIn(folder: string, name: string, text: string, mode?: number): string {
   mkdirSync(folder, { recursive: true });
   const target = join(folder, name);
   const temp = join(folder, `.${name}.${randomUUID()}.tmp`);
   try {
     writeFileSync(temp, text, { flag: "wx" });
+    if (mode !== undefined) chmodSync(temp, mode);
     renameSync(temp, target);
   } finally {
     rmSync(temp, { force: true });
@@ -162,7 +164,12 @@ export async function python<T = unknown>(module: string, args: string[], timeou
     }
   };
   if (result.timedOut) throw new Unexpected(`${what} took longer than ${timeoutMs / MINUTE} minutes`);
-  if (result.failure) throw new Unexpected(result.failure);
+  if (result.failure) {
+    // The runner names the command as given; it comes from FILM_PYTHON, so it is printed quoted.
+    const command = pythonCommand();
+    const failure = result.failure.startsWith(command) ? `${shown(command)}${result.failure.slice(command.length)}` : result.failure;
+    throw new Unexpected(failure);
+  }
   if (result.status === EXIT.refused) {
     const lines = result.stdout.split("\n").filter((line) => line.trim() !== "");
     if (lines.length > 0) throw new Refused(lines.map((line) => printable(line)));

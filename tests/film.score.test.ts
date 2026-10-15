@@ -181,7 +181,34 @@ test("a Python side that fails exits 1, one short line on stderr, no report", ()
   const missing = score(dir, ["--lyrics", "lyrics.txt", "--out", "out"], { FILM_PYTHON: "studio-kit-no-such-python" });
   assert.equal(missing.status, 1);
   assert.equal(missing.stdout, "");
-  assert.deepEqual(lines(missing.stderr), ["film:score: studio-kit-no-such-python could not be started"]);
+  assert.deepEqual(lines(missing.stderr), ['film:score: "studio-kit-no-such-python" could not be started']);
+
+  // The interpreter's name comes from the environment: it is printed JSON-quoted, on one line.
+  const odd = score(dir, ["--lyrics", "lyrics.txt", "--out", "out"], { FILM_PYTHON: "no-such\npython" });
+  assert.equal(odd.status, 1);
+  assert.deepEqual(lines(odd.stderr), ['film:score: "no-such\\npython" could not be started']);
+});
+
+test("the delivery is read from whole words of the cue", () => {
+  const cues = [
+    ["[Verse 3 - rising]", "spoken"], //   "rising" is not "sing": a verse stays spoken
+    ["[Hook - rap, fast]", "spoken"], //   "rap," is the word "rap"
+    ["[Bridge - sung softly]", "sung"],
+    ["[Outro - chanted]", "chant"],
+    ["[Drop - shouts]", "chant"],
+    ["[Intro - whisper]", "sung"], //      no delivery word, not a verse
+    ["[Verse 4: Spoken]", "spoken"],
+    ["[Pre-chorus - singing]", "sung"],
+  ];
+  const text = cues.map(([cue], i) => `${cue}\nline number ${i} goes here\n`).join("");
+  const dir = sheet(text);
+  const result = score(dir, ["--lyrics", "lyrics.txt", "--out", "out"]);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const report = JSON.parse(readFileSync(join(dir, "out", "score-report.json"), "utf8"));
+  assert.deepEqual(
+    report.sections.map((s: { cue: string; delivery: string }) => [s.cue, s.delivery]),
+    cues,
+  );
 });
 
 test("a traceback from Python never reaches stdout", () => {

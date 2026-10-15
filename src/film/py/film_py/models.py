@@ -7,7 +7,9 @@ It needs the network and the pinned requirements; no model needs a token. Each m
 in its own place under --dest, and `models.json` there lists every model with its source,
 revision, files, sizes, sha256 and the seconds its download took. A model that cannot be
 fetched is listed with `status: "missing"` and the reason, and nothing is put in its place;
-the commands that need it refuse with exit 2. The exit code is 0 when every model asked for
+the commands that need it refuse with exit 2. A model already in --dest (its manifest entry's
+files all there, or its expected files found without one) is listed as `present` and left
+alone: not downloaded again, and never turned into `missing`. The exit code is 0 when every model asked for
 is in place, 1 otherwise.
 
 This file imports nothing from film_py, so it runs as a plain file under `python3 -I`.
@@ -115,6 +117,50 @@ def fetch_whisper_tiny(dest: Path) -> dict:
     return {"source": WHISPER_REPO, "revision": WHISPER_REVISION, "path": target.name, "files": describe(dest, listing(target))}
 
 
+# Where each model's weights sit once downloaded: the files that must exist (glob patterns
+# under --dest) and the entry's `path`, a folder or the weight file itself.
+EXPECTED = {
+    "depth": {"source": DEPTH_REPO, "revision": DEPTH_REVISION, "folder": "depth-anything-v2-small",
+              "needs": ["depth-anything-v2-small/config.json", "depth-anything-v2-small/model.safetensors"]},
+    "mms_fa": {"source": "torchaudio.pipelines.MMS_FA", "revision": None, "folder": None,
+               "needs": ["torch/hub/checkpoints/model.pt"]},
+    "htdemucs": {"source": "demucs.pretrained htdemucs", "revision": None, "folder": None,
+                 "needs": ["hf/hub/models--adefossez--HTDemucs/snapshots/*/955717e8.safetensors"]},
+    "whisper_tiny": {"source": WHISPER_REPO, "revision": WHISPER_REVISION, "folder": "faster-whisper-tiny",
+                     "needs": ["faster-whisper-tiny/model.bin"]},
+}
+
+
+def intact(dest: Path, entry) -> bool:
+    """True when a manifest entry says the model is here and every file it lists still is."""
+    if not isinstance(entry, dict) or entry.get("status") not in ("ok", "present") or not entry.get("path"):
+        return False
+    if not (dest / entry["path"]).exists():
+        return False
+    for f in entry.get("files") or []:
+        path = dest / f["file"]
+        if not path.is_file() or path.stat().st_size != f["bytes"]:
+            return False
+    return True
+
+
+def already_here(dest: Path, key: str):
+    """An entry for a model whose expected files are already in --dest, or None."""
+    expected = EXPECTED[key]
+    found = []
+    for pattern in expected["needs"]:
+        matches = sorted(dest.glob(pattern))
+        if not matches:
+            return None
+        found.append(matches[0])
+    if expected["folder"]:
+        path, files = expected["folder"], listing(dest / expected["folder"])
+    else:
+        weight = found[-1]
+        path, files = str(weight.relative_to(dest)), {weight.resolve()} if weight.is_symlink() else {weight}
+    return {"source": expected["source"], "revision": expected["revision"], "path": path, "files": describe(dest, files)}
+
+
 FETCHERS = {
     "depth": fetch_depth,
     "mms_fa": fetch_mms_fa,
@@ -146,13 +192,21 @@ def main(argv=None) -> int:
     missing = 0
     for key in keys:
         started = time.monotonic()
-        try:
-            entry = FETCHERS[key](dest)
-            entry["status"] = "ok"
-        except Exception as error:  # noqa: BLE001  (any failure is recorded, never invented around)
-            entry = {"status": "missing", "reason": f"{type(error).__name__}: {error}"[:500], "path": None, "files": []}
-            missing += 1
-        entry["seconds"] = round(time.monotonic() - started, 1)
+        previous = manifest["models"].get(key)
+        # A model already in the folder is kept as it is: never downloaded again, never
+        # overwritten, and never marked missing because a fresh download failed.
+        if intact(dest, previous):
+            entry = {**previous, "status": "present"}
+        elif (found := already_here(dest, key)) is not None:
+            entry = {**found, "status": "present", "seconds": 0.0}
+        else:
+            try:
+                entry = FETCHERS[key](dest)
+                entry["status"] = "ok"
+            except Exception as error:  # noqa: BLE001  (any failure is recorded, never invented around)
+                entry = {"status": "missing", "reason": f"{type(error).__name__}: {error}"[:500], "path": None, "files": []}
+                missing += 1
+            entry["seconds"] = round(time.monotonic() - started, 1)
         manifest["models"][key] = entry
         size = sum(f["bytes"] for f in entry["files"]) / 1e6
         reason = f" ({entry['reason']})" if "reason" in entry else ""

@@ -63,7 +63,9 @@ def model(key: str) -> Path:
         if not path.exists():
             raise FileNotFoundError(path)
     except (OSError, ValueError, KeyError, TypeError):
-        refuse([f"model {key} is not in {root} (run python3 -I src/film/py/film_py/models.py --dest {root})"])
+        # The folder comes from FILM_MODELS: printed JSON-quoted, so it stays on one line.
+        where = shown(str(root))
+        refuse([f"model {key} is not in {where} (run python3 -I src/film/py/film_py/models.py --dest {where})"])
     return path
 
 

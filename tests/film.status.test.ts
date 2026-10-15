@@ -1,7 +1,7 @@
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -261,6 +261,27 @@ test("an unexpected failure exits 1 with one short line on stderr and nothing on
   assert.deepEqual(lines(result.stderr), ["film:status: unexpected failure"]);
   // No temp file is left behind.
   assert.deepEqual(readdirSync(dir).sort(), ["status-report.json", "status.json"]);
+});
+
+test("a --set whose report cannot be written exits 1 and leaves status.json as it was", () => {
+  const { dir, file } = project();
+  const before = readFileSync(file, "utf8");
+  mkdirSync(join(dir, "status-report.json"));
+  const result = status(dir, ["--status", "status.json", "--set", "stage=listen", "step=beats"]);
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.equal(result.stdout, "");
+  assert.deepEqual(lines(result.stderr), ["film:status: unexpected failure"]);
+  assert.equal(readFileSync(file, "utf8"), before);
+  assert.deepEqual(readdirSync(dir).sort(), ["status-report.json", "status.json"]);
+});
+
+test("--set keeps the file's permissions", () => {
+  const { dir, file } = project();
+  chmodSync(file, 0o640);
+  const result = status(dir, ["--status", "status.json", "--set", "stage=listen"]);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(JSON.parse(readFileSync(file, "utf8")).stage, "listen");
+  assert.equal(statSync(file).mode & 0o777, 0o640);
 });
 
 test("importing status.ts runs nothing: no output, no exit code", () => {

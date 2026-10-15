@@ -285,7 +285,9 @@ The contract, the same for every film command:
   file the command names), holding `ok`, the `inputs` it used and the `outputs`
   it produced.
 - Exit `2`: refused before any work, one line per problem on stdout, nothing
-  written. A model the command needs that is not in `$FILM_MODELS` is a refusal.
+  written. A model the command needs that is not in `$FILM_MODELS` is a refusal:
+  `model depth is not in "/opt/models" (run python3 -I src/film/py/film_py/models.py --dest "/opt/models")`,
+  the folder JSON-quoted.
 - Exit `3`: checked and failed, one line per failure on stdout, the report
   written.
 - Exit `1`: anything unexpected, one short line on stderr in the kit's own words
@@ -316,7 +318,10 @@ demucs `htdemucs` and faster-whisper `tiny` (`Systran/faster-whisper-tiny`, at a
 pinned revision). None needs a token. `models.json` there lists each model's
 source, revision, files, sizes, sha256 and download time; a model that could
 not be fetched is listed as `missing` with the reason, and nothing stands in for
-it.
+it. A model already in the folder (its entry's files all there, or its expected
+files found without an entry) is listed as `present` and left alone: it is not
+downloaded again, and a run that cannot reach the network never turns it into
+`missing`.
 
 ### `film:status`
 
@@ -351,7 +356,10 @@ later than the time it replaces) and writes the file to a fresh name renamed
 into place. `awaiting` and `expects` take JSON (`awaiting=null`,
 `expects=[{"key":"master","name":"The master WAV"}]`). `version` and
 `updated_at` cannot be set; neither can a field the schema does not have. The
-result is validated as a whole before anything is written.
+result is validated as a whole before anything is written. The new file keeps
+the old one's permissions, and if the report cannot be written afterwards the
+old text is put back before the exit 1, so a failed run never leaves a changed
+`status.json`.
 
 `status-report.json`: `ok`, `inputs` (`status`, the `set` pairs), `outputs`
 (`status`, the file when it was written, else null; `report`) and the `status`.
@@ -361,8 +369,9 @@ result is validated as a whole before anything is written.
 `--lyrics <lyrics.txt> --out <dir>`, both required. Scores a lyric sheet before
 any take is spent, after the song wiki's scorer. Section cues in square
 brackets (`[Verse 1 - spoken, deadpan]`) are skipped and name the section and
-its delivery (`spoken`, `sung` or `chant` from the cue's words; otherwise a
-verse is spoken and the rest sung). Per line, `score-report.json` holds the
+its delivery (`spoken`, `sung` or `chant` from the cue's whole words, so
+`rising` is not `sing` and `rap,` is `rap`; otherwise a verse is spoken and the
+rest sung). Per line, `score-report.json` holds the
 words with their syllables, stresses (`1` primary, `2` secondary, `0` weak) and
 `source` (`cmudict`, the bundled CMU dictionary; `fallback`, a letter-group
 count for a word it lacks; `letters`, an acronym said letter by letter;
@@ -502,7 +511,8 @@ be written) and `changelog: unexpected failure`. A render step that fails exits
 `film:<name>: unexpected failure`, or for its Python side
 `film:<name>: python film_py.<module> failed`,
 `... took longer than N minutes`, `... printed no result`, or
-`film:<name>: python3 could not be started`.
+`film:<name>: "python3" could not be started` (the interpreter's name, from
+`FILM_PYTHON` when set, JSON-quoted).
 
 ## Brand sources
 
