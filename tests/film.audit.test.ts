@@ -139,6 +139,17 @@ test("chapters: a gap or an overlap between chapters, a chapter short of the son
     b.chapters[0].t0 = 0.02;
   });
   assert.equal(failsOnly("chapters", head, "chapters9", []), 'gate chapters: the first chapter "ch01" starts at 0.02 s (frame 1): frame 0 is in no chapter');
+  // The last edge on the frame grid too: the song's 12 s is frame 288. 12.03 s is within 0.03 s
+  // but frame 289, a frame past the song; 11.98 s is frame 288, the song's, and passes. (The
+  // song ends on a frame edge here, so no edge within 0.03 s early can fall a frame short.)
+  const tail = changedBoard(dir, "chapters10.json", (b) => {
+    b.chapters[1].t1 = 12.03;
+  });
+  assert.equal(failsOnly("chapters", tail, "chapters10", []), `gate chapters: the last chapter "ch02" ends at 12.03 s (frame 289), the song at 12 s (frame 288): frame 288 is past the song's end`);
+  const onFrame = changedBoard(dir, "chapters12.json", (b) => {
+    b.chapters[1].t1 = 11.98;
+  });
+  assert.equal(audit(onFrame, "chapters12").status, 0);
   // An overlap, and the last chapter ending before the song.
   const overlap = changedBoard(dir, "chapters3.json", (b) => {
     b.chapters[0].t1 = 6.954;

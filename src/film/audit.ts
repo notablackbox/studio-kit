@@ -231,6 +231,13 @@ export function auditBoard(board: Board, analysis: Analysis, options: Options): 
         else if (end > start) problems.push(`${edges}: ${frames(start, end)} ${end - start === 1 ? "is" : "are"} in both`);
       }
       if (Math.abs(last.t1 - song) > CHAPTER_EPS + EPS) problems.push(`the last chapter ${q(last.id)} ends at ${num(last.t1)} s, the song at ${num(song)} s`);
+      else {
+        // The film holds frames 0 up to frameAt(song): the last chapter must end on that frame.
+        const [end, close] = [frameAt(last.t1), frameAt(song)];
+        const edges = `the last chapter ${q(last.id)} ends at ${num(last.t1)} s (frame ${end}), the song at ${num(song)} s (frame ${close})`;
+        if (end < close) problems.push(`${edges}: ${frames(end, close)} ${close - end === 1 ? "is" : "are"} in no chapter`);
+        else if (end > close) problems.push(`${edges}: ${frames(close, end)} ${end - close === 1 ? "is" : "are"} past the song's end`);
+      }
       for (const shot of shots) {
         const overlap = (c: (typeof chapters)[number]) => Math.min(shot.t1, c.t1) - Math.max(shot.t0, c.t0);
         const home = chapters.reduce((best, c) => (overlap(c) > overlap(best) ? c : best), chapters[0]);
