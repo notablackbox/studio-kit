@@ -1002,8 +1002,10 @@ gain, ducks the events under the vocal stem with `sidechaincompress`, adds the
 master, and brings the mix to the master's own integrated loudness, measured
 with `ebur128`; the limiter runs only when the levelled mix would peak over
 -0.2 dBFS (the report says which). It writes `mix.wav` (48 kHz, 24-bit,
-stereo). An event at or past the master's end is refused before any work (exit
-2). A mix more than 1 LU from the master after levelling is checked and failed
+stereo). A film with no sound events (every `--events` file an empty list, `[]`)
+is legitimate: the mix is the master alone, levelled and measured the same way
+(`mix: 0 events under the master, ...`). An event at or past the master's end is
+refused before any work (exit 2). A mix more than 1 LU from the master after levelling is checked and failed
 (exit 3, the report written); no test fixture forces that case. The four sounds are synthesised, never committed:
 `python3 -I src/film/py/film_py/sounds.py --dest <dir>` writes `tick.wav`,
 `stamp.wav`, `type.wav` and `whoosh.wav` (48 kHz 24-bit, a fixed seed); the

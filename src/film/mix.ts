@@ -11,7 +11,8 @@ import { SOUNDS, type SoundKind } from "../remotion/film/plan.ts";
 // film_py/sounds.py), the events bus ducked under the vocal stem with ffmpeg's
 // sidechaincompress, then brought to the master's own integrated loudness (EBU R128, measured
 // with ebur128) and written as `mix.wav`, 48 kHz 24-bit. The report holds the master's and the
-// mix's loudness. An event at or past the master's end is bad input, refused before any work
+// mix's loudness. With no events at all (every --events file an empty list), the mix is the
+// master alone, levelled and measured the same way. An event at or past the master's end is bad input, refused before any work
 // (exit 2). A mix more than 1 LU from the master's after levelling is checked and failed (exit
 // 3, the report written; no test fixture forces it). The limiter runs only when the levelled
 // mix would peak over -0.2 dBFS (the report says which).
@@ -108,7 +109,7 @@ async function main(): Promise<number> {
     const target = await loudness(master);
     const inputs = ["-i", master, "-i", vocals, ...kinds.flatMap((k) => ["-i", join(soundsDir, `${k}.wav`)])];
     const fmt = `aformat=sample_fmts=fltp:sample_rates=${RATE}:channel_layouts=stereo`;
-    const graph: string[] = [`[0:a]${fmt}[master]`, `[1:a]${fmt}[vox]`];
+    const graph: string[] = [`[0:a]${fmt}[master]`];
     const labels: string[] = [];
     kinds.forEach((kind, k) => {
       const mine = events.filter((e) => e.kind === kind);
@@ -121,7 +122,11 @@ async function main(): Promise<number> {
       });
     });
     const raw = join(temp, "raw.wav");
+    // No events (every --events file an empty list: a film with no sound layer): the master
+    // alone, levelled and measured as any mix. The vocal stem is only the ducking key, so it
+    // joins the graph only when there is a bus to duck (an unconsumed output fails ffmpeg).
     if (labels.length > 0) {
+      graph.push(`[1:a]${fmt}[vox]`);
       graph.push(`${labels.join("")}amix=inputs=${labels.length}:normalize=0:duration=longest,apad=whole_dur=${duration.toFixed(3)}[events]`);
       // The events duck under her voice: the vocal stem keys a fast compressor on the bus.
       graph.push(`[events][vox]sidechaincompress=threshold=0.02:ratio=8:attack=5:release=250:makeup=1[ducked]`);

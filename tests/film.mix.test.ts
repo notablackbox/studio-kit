@@ -107,6 +107,21 @@ test("each event sits at its time, and one under a sung word is ducked 6 dB or m
   assert.ok(at(quiet) - at(loud) >= 6, `in silence ${at(quiet).toFixed(1)} dB, under the word ${at(loud).toFixed(1)} dB`);
 });
 
+test("a film with no sound events: every --events file empty, the mix is the master levelled, exit 0", () => {
+  writeFileSync(join(dir, "none1.audio.json"), "[]\n");
+  writeFileSync(join(dir, "none2.audio.json"), "[]\n");
+  const result = film("mix", dir, ["--master", "song.wav", "--events", "none1.audio.json", "none2.audio.json", "--vocals", "vocals.wav", "--sounds", sounds, "--out", "none"]);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(lines(result.stdout)[0], /^mix: 0 events under the master, /);
+  const report = JSON.parse(readFileSync(join(dir, "none", "mix-report.json"), "utf8"));
+  assert.equal(report.ok, true);
+  assert.deepEqual(report.events, []);
+  assert.ok(Math.abs(report.loudness.delta_lu) <= 1, JSON.stringify(report.loudness));
+  const wav = wavInfo(join(dir, "none", "mix.wav"));
+  assert.deepEqual([wav.rate, wav.bits, wav.channels], [48000, 24, 2]);
+  assert.ok(Math.abs(wav.seconds - 12) < 0.05, String(wav.seconds));
+});
+
 test("refusals: an event outside the master, a kind with no sound, an unknown kind, missing flags", () => {
   writeFileSync(join(dir, "boom.audio.json"), JSON.stringify([{ t: 1, kind: "boom", gain: 0.3 }]));
   writeFileSync(join(dir, "late.audio.json"), JSON.stringify([{ t: 20, kind: "tick", gain: 0.3 }]));
