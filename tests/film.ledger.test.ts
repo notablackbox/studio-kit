@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { film, kitRoot, lines } from "./fixtures/film.ts";
-import { boardDir } from "./fixtures/board.ts";
+import { PROJECT_ID, boardDir, writeStatus } from "./fixtures/board.ts";
 import { keyOf } from "./fixtures/requests.ts";
 
 // film:ledger appends one row per call to ledger.jsonl (asked, polled, delivered, declined,
@@ -15,6 +15,8 @@ let key = "";
 let motionKey = "";
 before(() => {
   dir = boardDir();
+  // film:request and film:ledger read the production id from the status.json beside the ledger.
+  writeStatus(join(dir, "proj"));
   cpSync(join(kitRoot, "tests", "fixtures", "requests", "M01.json"), join(dir, "clips", "M01.json"));
   const w = film("request", dir, ["--clip", "clips/W01.json", "--provider", "openrouter", "--ledger", "proj/ledger.jsonl", "--out", "req", "--start-artifact", "a1", "--window-artifact", "a2"]);
   assert.equal(w.status, 0, w.stdout + w.stderr);
@@ -150,6 +152,7 @@ test("refusals: one line each, exit 2, the ledger left as it was", () => {
 
   // A stale request: two requests shaped for attempt 1, on two providers; once one is asked,
   // the other's attempt is taken.
+  writeStatus(join(dir, "fresh"));
   const shape = (provider: string, out: string) =>
     film("request", dir, ["--clip", "clips/W01.json", "--provider", provider, "--ledger", "fresh/ledger.jsonl", "--out", out, "--start-artifact", "a1", "--window-artifact", "a2"]);
   assert.equal(shape("openrouter", "s1").status, 0);
@@ -175,7 +178,7 @@ test("refusals: one line each, exit 2, the ledger left as it was", () => {
   const request = JSON.parse(readFileSync(join(dir, "req", "M01.request.json"), "utf8"));
   const mMeta = JSON.parse(readFileSync(join(dir, "req", "M01.request.meta.json"), "utf8"));
   mMeta.attempt = 2;
-  request.idempotency_key = mMeta.idempotency_key = keyOf("higgsfield", "bytedance/seedance-2.5", request.body, 2);
+  request.idempotency_key = mMeta.idempotency_key = keyOf(PROJECT_ID, "higgsfield", "bytedance/seedance-2.5", request.body, 2);
   writeFileSync(join(dir, "s3", "M01.request.json"), JSON.stringify(request));
   writeFileSync(join(dir, "s3", "M01.request.meta.json"), JSON.stringify(mMeta));
   const closed = film("ledger", dir, L("--asked", "s3/M01.request.json"));
@@ -196,6 +199,7 @@ test("the request's estimate must be an amount and the meta's: refused naming bo
   const request = JSON.parse(readFileSync(join(dir, "req", "W01.request.json"), "utf8"));
   const meta = JSON.parse(readFileSync(join(dir, "req", "W01.request.meta.json"), "utf8"));
   assert.equal(meta.estimate, request.estimate);
+  writeStatus(join(dir, "est"));
   const E = ["--ledger", "est/ledger.jsonl", "--out", "est", "--asked", "s6/W01.request.json"];
   const cases: [number, number, string][] = [
     [request.estimate, 9.99, `--asked: the request's estimate ${request.estimate} is not the meta's 9.99`],
@@ -227,6 +231,7 @@ test("a ledger reached through a linked folder inside --out is refused; nothing 
   mkdirSync(join(dir, "outside"));
   mkdirSync(join(dir, "proj2"));
   symlinkSync(join(dir, "outside"), join(dir, "proj2", "logs"));
+  writeStatus(join(dir, "outside"));
   // A request shaped against that ledger (none there yet, so attempt 1).
   const shaped = film("request", dir, ["--clip", "clips/W01.json", "--provider", "openrouter", "--ledger", "proj2/logs/ledger.jsonl", "--out", "s5", "--start-artifact", "a1", "--window-artifact", "a2"]);
   assert.equal(shaped.status, 0, shaped.stdout + shaped.stderr);
@@ -235,9 +240,10 @@ test("a ledger reached through a linked folder inside --out is refused; nothing 
     assert.equal(result.status, 2, `${ledger}: ${result.stdout}${result.stderr}`);
     assert.deepEqual(lines(result.stdout), ["--ledger must be inside --out (the ledger is appended to)"], ledger);
   }
-  assert.deepEqual(readdirSync(join(dir, "outside")), []);
+  assert.deepEqual(readdirSync(join(dir, "outside")), ["status.json"]);
   assert.deepEqual(readdirSync(join(dir, "proj2")), ["logs"]);
-  // A real folder inside --out, made or not yet made, is fine.
+  // A real folder inside --out is fine.
+  writeStatus(join(dir, "proj2", "real"));
   const fine = film("ledger", dir, ["--ledger", "proj2/real/ledger.jsonl", "--out", "proj2", "--asked", "s5/W01.request.json"]);
   assert.equal(fine.status, 0, fine.stdout + fine.stderr);
   assert.equal(rowsOf("proj2/real/ledger.jsonl").length, 1);
@@ -245,6 +251,7 @@ test("a ledger reached through a linked folder inside --out is refused; nothing 
 
 test("a ledger that is the report's own path is refused before any write", () => {
   // A real ledger, named as the report would be: appending then reporting would replace it.
+  writeStatus(join(dir, "seed3"));
   const seeded = film("ledger", dir, ["--ledger", "seed3/ledger.jsonl", "--out", "seed3", "--asked", "req/W01.request.json"]);
   assert.equal(seeded.status, 0, seeded.stdout + seeded.stderr);
   mkdirSync(join(dir, "proj3"));
@@ -277,13 +284,13 @@ test("a ledger that is the report's own path is refused before any write", () =>
 });
 
 test("film:request: a --ledger at the request report's path is refused", () => {
-  mkdirSync(join(dir, "req4"));
+  writeStatus(join(dir, "req4"));
   const ledger = join(dir, "req4", "request-report.json");
   writeFileSync(ledger, "");
   const result = film("request", dir, ["--clip", "clips/W01.json", "--provider", "openrouter", "--ledger", "req4/request-report.json", "--out", "req4", "--start-artifact", "a1", "--window-artifact", "a2"]);
   assert.equal(result.status, 2, result.stdout + result.stderr);
   assert.deepEqual(lines(result.stdout), ["--ledger is the report's path (request-report.json in --out): the report would overwrite it"]);
-  assert.deepEqual(readdirSync(join(dir, "req4")), ["request-report.json"]);
+  assert.deepEqual(readdirSync(join(dir, "req4")).sort(), ["request-report.json", "status.json"]);
   assert.equal(readFileSync(ledger, "utf8"), "");
 });
 
@@ -297,4 +304,18 @@ test("the ledger is never written through a link; anything unexpected is exit 1"
   assert.equal(result.stdout, "");
   assert.deepEqual(lines(result.stderr), ["film:ledger: the ledger could not be appended to"]);
   assert.equal(readFileSync(join(dir, "target.jsonl"), "utf8"), before);
+});
+
+test("--asked recomputes the key with the production id of the status.json beside the ledger", () => {
+  // The request was shaped for city-wakes-a1b2c3; a ledger of another production refuses it.
+  writeStatus(join(dir, "other"), "city-wakes-b2c3d4");
+  const other = film("ledger", dir, ["--ledger", "other/ledger.jsonl", "--out", "other", "--asked", "req/W01.request.json"]);
+  assert.equal(other.status, 2, other.stdout + other.stderr);
+  assert.deepEqual(lines(other.stdout), ["--asked: the idempotency_key is not the key of the body, provider, model and attempt 1"]);
+  assert.equal(existsSync(join(dir, "other", "ledger.jsonl")), false);
+  // No status.json beside the ledger: no production, no key to check.
+  const bare = film("ledger", dir, ["--ledger", "bare/ledger.jsonl", "--out", "bare", "--asked", "req/W01.request.json"]);
+  assert.equal(bare.status, 2, bare.stdout + bare.stderr);
+  assert.deepEqual(lines(bare.stdout), ["status.json beside --ledger has no project: run film:status on it"]);
+  assert.equal(existsSync(join(dir, "bare", "ledger.jsonl")), false);
 });

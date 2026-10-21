@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { Refused } from "./cli.ts";
 
 // ledger.jsonl, the record of every paid call (spec D6, wiki/formats "The logs"): one JSON row
@@ -108,10 +109,26 @@ export function canonical(value: unknown): string {
   return JSON.stringify(value);
 }
 
-// The idempotency key of a request (spec 8.2, D6): SHA-256 of the canonical JSON of the
-// provider, the model, the body and the attempt number. The same request asked again gets the
-// same key, so call_external reconciles it instead of paying twice; a re-roll is the next
-// attempt and gets a new key.
-export function idempotencyKey(provider: string, model: string, body: unknown, attempt: number): string {
-  return createHash("sha256").update(canonical({ attempt, body, model, provider })).digest("hex");
+// The production id (status.json's `project`): lowercase letters, digits and dashes, the first
+// not a dash, 64 at most. film:status checks it and minted once; the key below carries it.
+export const PROJECT = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+// The production the ledger belongs to: the `project` of the status.json beside it.
+export function readProject(ledgerPath: string): string {
+  try {
+    const { project } = JSON.parse(readFileSync(join(dirname(ledgerPath), "status.json"), "utf8"));
+    if (typeof project === "string" && PROJECT.test(project)) return project;
+  } catch {
+    // missing, unreadable or not JSON: refused below with the rest
+  }
+  throw new Refused(["status.json beside --ledger has no project: run film:status on it"]);
+}
+
+// The idempotency key of a request (spec 8.2, D6, v1.4 section 6): SHA-256 of the canonical JSON
+// of the production id, the provider, the model, the body and the attempt number. The same
+// request asked again gets the same key, so call_external reconciles it instead of paying
+// twice; a re-roll is the next attempt and gets a new key; two productions of one brief never
+// share a key.
+export function idempotencyKey(project: string, provider: string, model: string, body: unknown, attempt: number): string {
+  return createHash("sha256").update(canonical({ attempt, body, model, project, provider })).digest("hex");
 }

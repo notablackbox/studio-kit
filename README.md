@@ -774,7 +774,10 @@ spec 8.2, nothing more (the skill adds the id of the tranche it opened):
   times the rate per second for the provider, the model and the resolution
   (the table below, or `--rate-per-second`), or one image at the image rate.
 - `idempotency_key`: SHA-256 of the canonical JSON (keys sorted, no spaces) of
-  `{attempt, body, model, provider}`. The attempt is the number of `asked` rows
+  `{attempt, body, model, project, provider}`; `project` is the production id,
+  the `project` of the `status.json` beside `--ledger` (a missing file, or one
+  without a valid `project`, is refused), so two productions of one brief never
+  share a key. The attempt is the number of `asked` rows
   the ledger holds for the reference (the clip or slot id), on any provider,
   plus one. The same request shaped twice gets the same key, so a retry is
   reconciled, never paid twice; a re-roll, once its request is in the ledger,
@@ -849,8 +852,8 @@ provider, attempt, length, estimate and the key's first twelve digits:
 
 - `--asked <request.json> [--meta <request.meta.json>]`: a request film:request
   shaped, as asked (the meta file defaults to the request's sibling
-  `<id>.request.meta.json`; the key is recomputed from the request's body and
-  the meta's provider, model and attempt, and a mismatch is refused; the
+  `<id>.request.meta.json`; the key is recomputed from the production id (the `status.json` beside the
+  ledger), the request's body and the meta's provider, model and attempt, and a mismatch is refused; the
   request's `estimate` must be an amount, a number 0 or more, and the meta's
   `estimate`, else it is refused naming both);
 - `--polled <key> [--figures <json>]`;
@@ -1489,6 +1492,8 @@ and `model depth is not in "/opt/models" (run ...)`.
   string or `null` is refused, never read as no refs)
 - `"W01" was declined on openrouter: no request for it on any provider`
 - `--ledger line 3 is not a ledger row`
+- `status.json beside --ledger has no project: run film:status on it` (no `status.json` beside the
+  ledger, or no valid `project` in it; `film:ledger --asked` says the same)
 - `--ledger is "W01.request.json" in --out: the request would overwrite it` (or
   `"W01.request.meta.json"`, or `--clip`/`--image`): an input at either file the request
   writes in `--out`, by the same tests as the report's path, is refused before any write

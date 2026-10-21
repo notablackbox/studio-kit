@@ -1,4 +1,4 @@
-import { cpSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { kitRoot, tempDir } from "./film.ts";
 
@@ -16,9 +16,29 @@ export type AnyBoard = {
   plates: Record<string, unknown>[];
 };
 
+export const PROJECT_ID = "city-wakes-a1b2c3";
+
+// A valid status.json in `folder` (made if it is not there): film:request and film:ledger read
+// the production id from the one beside the ledger.
+export function writeStatus(folder: string, project = PROJECT_ID): void {
+  mkdirSync(folder, { recursive: true });
+  const status = {
+    version: 1,
+    project,
+    stage: "motion",
+    step: "footage",
+    awaiting: null,
+    expects: [],
+    sandbox_id: "sbx-test-0001",
+    updated_at: "2026-10-15T08:00:00.000Z",
+  };
+  writeFileSync(join(folder, "status.json"), JSON.stringify(status, null, 2) + "\n");
+}
+
 export function boardDir(): string {
   const dir = tempDir("board");
   cpSync(boardFixture, dir, { recursive: true });
+  writeStatus(dir);
   return dir;
 }
 

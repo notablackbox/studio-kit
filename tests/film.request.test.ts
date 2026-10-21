@@ -1,15 +1,15 @@
 import { before, test } from "node:test";
 import assert from "node:assert/strict";
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { film, lines } from "./fixtures/film.ts";
-import { boardDir } from "./fixtures/board.ts";
+import { PROJECT_ID, boardDir, writeStatus } from "./fixtures/board.ts";
 import { keyOf, requestsFixture as requests } from "./fixtures/requests.ts";
 
 // film:request shapes the input of the harness's call_external tool for one clip or image slot,
 // exactly as spec 8.2 has it: the secret's name, the provider's URL, the method, the body with
-// {{artifact:<id>}} placeholders, the estimate, the idempotency key (provider, model, body and
-// the attempt the ledger holds) and `return` (an asynchronous video job) or `fetch_to` (an
+// {{artifact:<id>}} placeholders, the estimate, the idempotency key (production id, provider, model,
+// body and the attempt the ledger holds) and `return` (an asynchronous video job) or `fetch_to` (an
 // image). Everything kit-side goes in <id>.request.meta.json: the reference, the attempt, the
 // rates, the poll and the download. It never calls anything. Both files are compared with
 // recorded ones.
@@ -52,7 +52,7 @@ test("a sung window on OpenRouter: reference mode, the recorded body, the key, t
   // the result URL the poll returns.
   assert.deepEqual(meta.poll, { method: "GET", url: "https://openrouter.ai/api/v1/videos/{id}", body: null });
   assert.deepEqual(meta.download, { from: "unsigned_urls[0]", fetch_to: "clips/W01/take-1.mp4" });
-  assert.equal(request.idempotency_key, keyOf("openrouter", "bytedance/seedance-2.5", request.body, 1));
+  assert.equal(request.idempotency_key, keyOf(PROJECT_ID, "openrouter", "bytedance/seedance-2.5", request.body, 1));
   // The lyric in plain quotes, no braces, no output settings in the prompt.
   assert.match(request.body.prompt, /"the city wakes we count the windows"/);
   assert.doesNotMatch(request.body.prompt, /[{}]|720p|16:9/);
@@ -81,14 +81,14 @@ test("the same sung window on Higgsfield, and a motion clip on both providers", 
   const hf = film("request", dir, W01("higgsfield", "hf"));
   assert.equal(hf.status, 0, hf.stdout + hf.stderr);
   const { request } = matches("hf", "W01", "W01.higgsfield");
-  assert.equal(request.idempotency_key, keyOf("higgsfield", "bytedance/seedance-2.5", request.body, 1));
+  assert.equal(request.idempotency_key, keyOf(PROJECT_ID, "higgsfield", "bytedance/seedance-2.5", request.body, 1));
 
   for (const provider of ["openrouter", "higgsfield"]) {
     const result = film("request", dir, ["--clip", "clips/M01.json", "--provider", provider, "--ledger", "ledger.jsonl", "--out", `m-${provider}`, "--start-artifact", "art-p-roof"]);
     assert.equal(result.status, 0, result.stdout + result.stderr);
     const { request: motion } = matches(`m-${provider}`, "M01", `M01.${provider}`);
     assert.deepEqual(Object.keys(motion), INPUT("return"));
-    assert.equal(motion.idempotency_key, keyOf(provider, "bytedance/seedance-2.5", motion.body, 1));
+    assert.equal(motion.idempotency_key, keyOf(PROJECT_ID, provider, "bytedance/seedance-2.5", motion.body, 1));
   }
 });
 
@@ -100,7 +100,7 @@ test("an image slot on OpenRouter: the image model through chat completions, no 
   assert.deepEqual(Object.keys(request), INPUT("fetch_to"));
   assert.equal(request.fetch_to, "plates/cands/P001/1.json");
   assert.equal(meta.poll, null);
-  assert.equal(request.idempotency_key, keyOf("openrouter", "google/gemini-3-pro-image", request.body, 1));
+  assert.equal(request.idempotency_key, keyOf(PROJECT_ID, "openrouter", "google/gemini-3-pro-image", request.body, 1));
   assert.deepEqual(lines(result.stdout), [`request: "P001" image on openrouter, attempt 1, estimate $0.14, key ${request.idempotency_key.slice(0, 12)}`]);
   const over = film("request", dir, ["--image", "P001.json", "--provider", "openrouter", "--ledger", "ledger.jsonl", "--out", "img2", "--rate-per-image", "0.5"]);
   assert.equal(over.status, 0, over.stdout + over.stderr);
@@ -126,7 +126,7 @@ test("the key is deterministic; a new attempt in the ledger gives a new key and 
   assert.equal(secondMeta.attempt, 2);
   assert.equal(secondMeta.download.fetch_to, "clips/W01/take-2.mp4");
   assert.notEqual(second.idempotency_key, first.idempotency_key);
-  assert.equal(second.idempotency_key, keyOf("openrouter", "bytedance/seedance-2.5", second.body, 2));
+  assert.equal(second.idempotency_key, keyOf(PROJECT_ID, "openrouter", "bytedance/seedance-2.5", second.body, 2));
   // A failed attempt still counts: the attempt after it is 3.
   assert.equal(film("ledger", dir, ["--ledger", "keys.jsonl", "--out", ".", "--asked", "k3/W01.request.json"]).status, 0);
   assert.equal(film("ledger", dir, ["--ledger", "keys.jsonl", "--out", ".", "--failed", second.idempotency_key, "--reason", "HTTP 502"]).status, 0);
@@ -141,7 +141,7 @@ test("--resolution and --rate-per-second change the body, the estimate and the k
   const request = readJson("r1", "W01.request.json");
   assert.equal(request.body.resolution, "480p");
   assert.equal(request.estimate, 0.52); // 5 s at 0.103
-  assert.equal(request.idempotency_key, keyOf("openrouter", "bytedance/seedance-2.5", request.body, 1));
+  assert.equal(request.idempotency_key, keyOf(PROJECT_ID, "openrouter", "bytedance/seedance-2.5", request.body, 1));
   const rate = film("request", dir, W01("higgsfield", "r2", "ledger.jsonl", ["--resolution", "1080p", "--rate-per-second", "1.25"]));
   assert.equal(rate.status, 0, rate.stdout + rate.stderr);
   assert.equal(readJson("r2", "W01.request.json").estimate, 6.25);
@@ -263,9 +263,50 @@ test("flag refusals: one line each, exit 2, nothing written", () => {
   assert.deepEqual(lines(named.stdout), ['--clip: "W09.json" holds clip "W01"']);
 });
 
+test("the key is derived from the production id: two productions of one brief never share a key", () => {
+  const other = boardDir();
+  writeStatus(other, "city-wakes-b2c3d4");
+  const a = film("request", dir, W01("openrouter", "ka"));
+  const b = film("request", other, W01("openrouter", "kb"));
+  assert.equal(a.status, 0, a.stdout + a.stderr);
+  assert.equal(b.status, 0, b.stdout + b.stderr);
+  const first = readJson("ka", "W01.request.json");
+  const second = JSON.parse(readFileSync(join(other, "kb", "W01.request.json"), "utf8"));
+  assert.deepEqual(first.body, second.body);
+  assert.notEqual(first.idempotency_key, second.idempotency_key);
+  assert.equal(first.idempotency_key, keyOf(PROJECT_ID, "openrouter", "bytedance/seedance-2.5", first.body, 1));
+  assert.equal(second.idempotency_key, keyOf("city-wakes-b2c3d4", "openrouter", "bytedance/seedance-2.5", second.body, 1));
+});
+
+test("a ledger with no status.json beside it, or one without a project, is refused", () => {
+  const noFile = boardDir();
+  rmSync(join(noFile, "status.json"));
+  const missing = film("request", noFile, W01("openrouter", "np"));
+  assert.equal(missing.status, 2);
+  assert.deepEqual(lines(missing.stdout), ["status.json beside --ledger has no project: run film:status on it"]);
+  assert.equal(existsSync(join(noFile, "np")), false);
+
+  const bad: [string, string][] = [
+    ["not JSON", "{ nope"],
+    ["no project", JSON.stringify({ version: 1 })],
+    ["a numeric project", JSON.stringify({ project: 7 })],
+    ["a project in capitals", JSON.stringify({ project: "City-Wakes" })],
+    ["a project with a leading dash", JSON.stringify({ project: "-city" })],
+    ["a project of 65 characters", JSON.stringify({ project: "a".repeat(65) })],
+  ];
+  for (const [label, text] of bad) {
+    const folder = boardDir();
+    writeFileSync(join(folder, "status.json"), text);
+    const result = film("request", folder, W01("openrouter", "np"));
+    assert.equal(result.status, 2, label);
+    assert.deepEqual(lines(result.stdout), ["status.json beside --ledger has no project: run film:status on it"], label);
+    assert.equal(existsSync(join(folder, "np")), false, label);
+  }
+});
+
 test("a --ledger at the request's own output paths is refused before any write", () => {
   const arts = ["--start-artifact", "a1", "--window-artifact", "a2"];
-  mkdirSync(join(dir, "lq"), { recursive: true });
+  writeStatus(join(dir, "lq"));
   for (const named of ["W01.request.json", "W01.request.meta.json"]) {
     // An empty ledger (no rows yet) sitting where the request would write.
     writeFileSync(join(dir, "lq", named), "");
@@ -274,12 +315,13 @@ test("a --ledger at the request's own output paths is refused before any write",
     assert.deepEqual(lines(result.stdout), [`--ledger is ${JSON.stringify(named)} in --out: the request would overwrite it`]);
     assert.equal(readFileSync(join(dir, "lq", named), "utf8"), "");
   }
-  assert.deepEqual(readdirSync(join(dir, "lq")).sort(), ["W01.request.json", "W01.request.meta.json"]);
-  // A ledger not made yet, at that path in an --out not made yet, is refused the same way.
+  assert.deepEqual(readdirSync(join(dir, "lq")).sort(), ["W01.request.json", "W01.request.meta.json", "status.json"]);
+  // A ledger not made yet, at that path, is refused the same way.
+  writeStatus(join(dir, "lq2"));
   const fresh = film("request", dir, ["--clip", "clips/W01.json", "--ledger", "lq2/W01.request.meta.json", "--out", "lq2", "--provider", "openrouter", ...arts]);
   assert.equal(fresh.status, 2, fresh.stdout + fresh.stderr);
   assert.deepEqual(lines(fresh.stdout), ['--ledger is "W01.request.meta.json" in --out: the request would overwrite it']);
-  assert.equal(existsSync(join(dir, "lq2")), false);
+  assert.deepEqual(readdirSync(join(dir, "lq2")), ["status.json"]);
 });
 
 test("a sung prompt over about 90 words is a warning, not a refusal", () => {

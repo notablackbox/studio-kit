@@ -1,13 +1,14 @@
 import { closeSync, constants, mkdirSync, openSync, readFileSync, realpathSync, writeSync } from "node:fs";
 import { dirname, relative, isAbsolute } from "node:path";
 import { EXIT, Refused, Unexpected, fromCaller, isMain, outProblem, parseFlags, refuseReportPaths, requireFile, run, shown, writeReport } from "./lib/cli.ts";
-import { type Kind, type Row, idempotencyKey, readLedger, stateOf } from "./lib/ledger.ts";
+import { type Kind, type Row, idempotencyKey, readLedger, readProject, stateOf } from "./lib/ledger.ts";
 
 // film:ledger records what was asked of a provider and what came back (spec D6): one row per
 // call appended to ledger.jsonl, never a row rewritten. `--asked <request.json> [--meta <file>]`
 // records a request film:request shaped, with its meta file (by default the sibling
-// <id>.request.meta.json): the key, recomputed from the request's body and the meta's
-// provider, model and attempt, and the reference, attempt, provider and estimate. `--polled`,
+// <id>.request.meta.json): the key, recomputed from the production id (the status.json beside
+// the ledger), the request's body and the meta's provider, model and attempt, and the
+// reference, attempt, provider and estimate. `--polled`,
 // `--delivered --file`, `--declined` and `--failed` name the key of an asked row and carry its
 // facts, with the provider's figures as returned (`--figures`, a JSON object) and a reason. A
 // declined row closes the reference on every provider: film:request refuses it from then on,
@@ -33,8 +34,8 @@ function readJson(path: string): unknown {
 }
 
 // The request (call_external's input) and its meta file, checked against each other: the key
-// must be the one the body, the provider, the model and the attempt give.
-function readRequest(requestPath: string, metaPath: string): Asked {
+// must be the one the production, the body, the provider, the model and the attempt give.
+function readRequest(requestPath: string, metaPath: string, ledgerPath: string): Asked {
   const request = readJson(requestPath);
   if (!isObject(request) || typeof request.idempotency_key !== "string" || !/^[0-9a-f]{64}$/.test(request.idempotency_key) || typeof request.estimate !== "number" || !isObject(request.body)) {
     throw new Refused(["--asked is not a request file"]);
@@ -59,7 +60,7 @@ function readRequest(requestPath: string, metaPath: string): Asked {
   if (asked !== meta.estimate) {
     throw new Refused([`--asked: the request's estimate ${shown(asked)} is not the meta's ${shown(meta.estimate)}`]);
   }
-  if (idempotencyKey(meta.provider, meta.model, request.body, meta.attempt) !== request.idempotency_key) {
+  if (idempotencyKey(readProject(ledgerPath), meta.provider, meta.model, request.body, meta.attempt) !== request.idempotency_key) {
     throw new Refused([`--asked: the idempotency_key is not the key of the body, provider, model and attempt ${meta.attempt}`]);
   }
   return { key: request.idempotency_key, reference: meta.reference, attempt: meta.attempt, provider: meta.provider, estimate: request.estimate };
@@ -186,7 +187,7 @@ async function main(): Promise<number> {
   if (action === "asked") {
     const requestPath = requireFile(fromCaller(target), "--asked");
     metaPath = values.meta !== undefined ? fromCaller(values.meta) : requestPath.replace(/(\.json)?$/i, ".meta.json");
-    const asked = readRequest(requestPath, metaPath);
+    const asked = readRequest(requestPath, metaPath, ledgerPath);
     if (rows.some((r) => r.key === asked.key)) throw new Refused([`--asked: key ${shown(asked.key)} is already in the ledger`]);
     const state = stateOf(rows, asked.reference);
     if (state.declined_on.length > 0) {

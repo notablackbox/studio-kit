@@ -1,14 +1,15 @@
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { EXIT, Refused, fromCaller, isMain, isOutPath, outProblem, parseFlags, refuseReportPaths, requireFile, run, shown, writeIn, writeReport } from "./lib/cli.ts";
-import { idempotencyKey, readLedger, stateOf } from "./lib/ledger.ts";
+import { idempotencyKey, readLedger, readProject, stateOf } from "./lib/ledger.ts";
 
 // film:request shapes one paid call and makes none (spec D6 and 8.2). <id>.request.json is
 // exactly the input of the harness's call_external tool for a clip (clips/<id>.json) or an
 // image slot: the secret's name (never a value), the provider's URL, the method, the body
 // with {{artifact:<id>}} placeholders for the plate and the window the skill saved as
-// artifacts, the estimate, the idempotency key (SHA-256 of the provider, the model, the body
-// and the attempt number: the ledger's asked rows for the reference, plus one), and `return`
+// artifacts, the estimate, the idempotency key (SHA-256 of the production id, the provider,
+// the model, the body and the attempt number: the ledger's asked rows for the reference, plus
+// one; the production id is the `project` of the status.json beside the ledger), and `return`
 // for an asynchronous video job (the job comes back to the skill) or `fetch_to` for a
 // synchronous image. <id>.request.meta.json holds the kit's side: the reference, the attempt,
 // the rates, the poll (a GET with no body on the provider's status URL) and the download
@@ -246,6 +247,7 @@ async function main(): Promise<number> {
   // The ledger: a declined reference is closed on every provider; the attempt is the next one.
   const ledgerPath = fromCaller(values.ledger);
   const state = stateOf(readLedger(ledgerPath), id);
+  const project = readProject(ledgerPath);
   if (state.declined_on.length > 0) throw new Refused([`${shown(id)} was declined on ${state.declined_on.join(" and ")}: no request for it on any provider`]);
   const attempt = state.attempts + 1;
 
@@ -311,7 +313,7 @@ async function main(): Promise<number> {
     requestBody = { prompt: text, duration, resolution, generate_audio: false, image_url: placeholder(start!) };
   }
 
-  const key = idempotencyKey(provider, modelId, requestBody, attempt);
+  const key = idempotencyKey(project, provider, modelId, requestBody, attempt);
   const fetchTo = kind === "image" ? `plates/cands/${id}/${attempt}.json` : `clips/${id}/take-${attempt}.mp4`;
   // call_external's input, and nothing else: the skill adds the tranche it opened.
   const request = {

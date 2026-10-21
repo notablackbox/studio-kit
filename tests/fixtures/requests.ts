@@ -3,8 +3,8 @@ import { join } from "node:path";
 import { kitRoot } from "./film.ts";
 
 // The request tests' fixture: tests/fixtures/requests/ (a motion clip, an image slot, and the
-// recorded call_external inputs and their meta files), and the idempotency key computed by
-// the tests' own canonical JSON, written apart from the kit's.
+// recorded call_external inputs and their meta files), and the idempotency key (production id, provider,
+// model, body, attempt) computed by the tests' own canonical JSON, written apart from the kit's.
 
 export const requestsFixture = join(kitRoot, "tests", "fixtures", "requests");
 
@@ -20,5 +20,5 @@ function canon(v: unknown): string {
   return JSON.stringify(v);
 }
 
-export const keyOf = (provider: string, model: string, body: unknown, attempt: number) =>
-  createHash("sha256").update(canon({ attempt, body, model, provider })).digest("hex");
+export const keyOf = (project: string, provider: string, model: string, body: unknown, attempt: number) =>
+  createHash("sha256").update(canon({ attempt, body, model, project, provider })).digest("hex");
