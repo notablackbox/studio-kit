@@ -399,6 +399,7 @@ in one line and exits 2:
 ```json
 {
   "version": 1,
+  "project": "city-wakes-a1b2c3",
   "stage": "board",
   "step": "audit",
   "awaiting": { "kind": "ask", "id": "board-approval" },
@@ -408,7 +409,10 @@ in one line and exits 2:
 }
 ```
 
-`stage` is one of `brief`, `song`, `listen`, `cast`, `board`, `plates`,
+`project` is the production's id, lowercase letters, digits and dashes (the first
+not a dash, 64 at most), minted once by the orchestrator when it writes the file
+and never set after: `film:request` and `film:ledger` read it from the
+`status.json` beside the ledger and fold it into the idempotency key. `stage` is one of `brief`, `song`, `listen`, `cast`, `board`, `plates`,
 `footage`, `motion`, `build`, `cut`, `deliver`, `delivered`; `step` and
 `sandbox_id` non-empty strings; `awaiting` null or `{kind: "ask" | "files", id}`;
 `expects` a list of `{key, name}`; `updated_at` a UTC time. The fields are
@@ -421,7 +425,8 @@ are all refused with the first one named.
 later than the time it replaces) and writes the file to a fresh name renamed
 into place. `awaiting` and `expects` take JSON (`awaiting=null`,
 `expects=[{"key":"master","name":"The master WAV"}]`). `version` and
-`updated_at` cannot be set; neither can a field the schema does not have. The
+`updated_at` cannot be set; neither can `project`, nor a field the schema does
+not have. The
 result is validated as a whole before anything is written. The new file keeps
 the old one's permissions, and if the report cannot be written afterwards the
 old text is put back before the exit 1, so a failed run never leaves a changed
@@ -1348,6 +1353,7 @@ one line per such flag. The lists below do not repeat it.
 - `unexpected argument "..." (field=value pairs follow --set)`
 - `--set wants field=value, got "..."`,
   `version and updated_at are set by film:status, not --set`,
+  `--set cannot set project`,
   `cannot set "...": not a field of status.json`, `X is set twice`,
   `awaiting must be JSON: null or {kind, id}`,
   `expects must be JSON: a list of {key, name}`

@@ -14,6 +14,7 @@ import {
   writeIn,
   writeReport,
 } from "./lib/cli.ts";
+import { PROJECT } from "./lib/ledger.ts";
 
 // film:status: validates a production's status.json (schema version 1), prints it and exits 0,
 // or names the first wrong field and exits 2. `--set field=value ...` updates the file and bumps
@@ -27,6 +28,7 @@ export const STAGES = [
 
 export type Status = {
   version: 1;
+  project: string;
   stage: (typeof STAGES)[number];
   step: string;
   awaiting: null | { kind: "ask" | "files"; id: string };
@@ -36,7 +38,7 @@ export type Status = {
 };
 
 // The schema's fields, in the order they are checked.
-const FIELDS = ["version", "stage", "step", "awaiting", "expects", "sandbox_id", "updated_at"] as const;
+const FIELDS = ["version", "project", "stage", "step", "awaiting", "expects", "sandbox_id", "updated_at"] as const;
 const SETTABLE = new Set<string>(["stage", "step", "awaiting", "expects", "sandbox_id"]);
 const JSON_FIELDS = new Set<string>(["awaiting", "expects"]);
 
@@ -67,6 +69,8 @@ function fieldProblem(field: (typeof FIELDS)[number], value: unknown): string | 
   switch (field) {
     case "version":
       return value === 1 ? null : `version is ${shown(value)}, want 1`;
+    case "project":
+      return typeof value === "string" && PROJECT.test(value) ? null : `project must match ${PROJECT.source.slice(1, -1)}`;
     case "stage":
       return (STAGES as readonly unknown[]).includes(value) ? null : `stage is ${shown(value)}, want one of ${STAGES.join(", ")}`;
     case "step":
@@ -120,6 +124,7 @@ export function parseAssignments(pairs: string[]): Record<string, unknown> {
     const field = pair.slice(0, at);
     const text = pair.slice(at + 1);
     if (field === "version" || field === "updated_at") throw new Refused(["version and updated_at are set by film:status, not --set"]);
+    if (field === "project") throw new Refused(["--set cannot set project"]);
     if (!SETTABLE.has(field)) throw new Refused([`cannot set ${shown(field)}: not a field of status.json`]);
     if (Object.hasOwn(set, field)) throw new Refused([`${field} is set twice`]);
     if (JSON_FIELDS.has(field)) {
