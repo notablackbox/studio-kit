@@ -31,7 +31,9 @@ every ledger used with `film:request` or `film:ledger --asked`, now want
   take as a WAV (estimate $0.01). Both write the usual request and meta files
   and name `UNIFICALLY_API_KEY`. The poll envelope (`data.status`, `data.cost`,
   `data.clips[]`, `data.wav_url`) is read from the provider's documentation
-  and is confirmed by the first live call.
+  and is confirmed by the first live call. A task's title, tags and lyrics
+  are measured in characters (code points), so an emoji counts once, and
+  `--rate-per-task` is refused with `--clip` and `--image`.
 
 ## v0.2.0, 2026-10-15
 

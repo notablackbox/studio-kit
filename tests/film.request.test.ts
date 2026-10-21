@@ -251,6 +251,8 @@ test("flag refusals: one line each, exit 2, nothing written", () => {
     [[...T1, "--rate-per-task", "0"], '--rate-per-task is "0", want dollars above 0'],
     [["--song", "song/tasks/nope.json", "--provider", "unifically", "--ledger", "ledger.jsonl", "--out", "x"], "--song cannot be read"],
     [["--wav", "song/takes/S01.json", "--provider", "unifically", "--ledger", "ledger.jsonl", "--out", "x", "--rate-per-task", "0.5"], "--wav takes no --rate-per-task"],
+    [[...sung, "--provider", "openrouter", ...arts, "--rate-per-task", "0.5"], "--clip takes no --rate-per-task"],
+    [["--image", "P001.json", "--ledger", "ledger.jsonl", "--out", "x", "--provider", "openrouter", "--rate-per-task", "0.5"], "--image takes no --rate-per-task"],
     [["--image", "P001.json", "--ledger", "ledger.jsonl", "--out", "x", "--provider", "higgsfield"], '"P001" model "google/gemini-3-pro-image" has no known URL on higgsfield'],
     [[...sung, "--provider", "openrouter", "--start-artifact", "a1"], '"W01" is sung: --window-artifact is required'],
     [[...sung, "--provider", "openrouter", "--window-artifact", "a2"], "--start-artifact is required for a clip"],
@@ -378,6 +380,8 @@ test("a song task's fields and a take's are refusals: one line each, exit 2, not
     [song("T14", (f) => (f.title = "t".repeat(81))), ['"T14" title is 81 characters, want 1 to 80']],
     [song("T15", (f) => (f.tags = "t".repeat(1001))), ['"T15" tags is 1001 characters, want 1 to 1000']],
     [song("T16", (f) => (f.lyrics = "l".repeat(5001))), ['"T16" lyrics is 5001 characters, want 1 to 5000']],
+    // Counted in code points: 81 emoji are 81 characters, not 162.
+    [song("T21", (f) => (f.title = "\u{1F3B5}".repeat(81))), ['"T21" title is 81 characters, want 1 to 80']],
     [song("T17", (f) => (f.lyrics = "   ")), ['"T17" has no lyrics']],
     [song("T18", (f) => delete f.negative_tags), ['"T18" negative_tags is undefined, want a string (may be empty)']],
     [song("T19", (f) => (f.negative_tags = 7)), ['"T19" negative_tags is 7, want a string (may be empty)']],
@@ -504,4 +508,11 @@ test("anything unexpected is exit 1 with one line on stderr", () => {
   assert.equal(result.stdout, "");
   assert.deepEqual(lines(result.stderr), ["film:request: unexpected failure"]);
   assert.equal(existsSync(join(dir, "blocked", "request-report.json")), false);
+});
+
+test("a song title of 80 emoji is 80 characters and is shaped", () => {
+  const task = taskVariant("song/tasks", "T22", "T1.json", (f) => (f.title = "\u{1F3B5}".repeat(80)));
+  const result = film("request", dir, ["--song", task, "--provider", "unifically", "--ledger", "ledger.jsonl", "--out", "song/emoji"]);
+  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+  assert.equal(readJson("song/emoji", "T22.request.json").body.input.title, "\u{1F3B5}".repeat(80));
 });

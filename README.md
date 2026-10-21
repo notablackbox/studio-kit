@@ -68,7 +68,7 @@ npm --prefix /opt/studio run film:audit -- --board <shots.json> --beats <beats.j
 npm --prefix /opt/studio run film:sheet -- --board <shots.json> --plates <dir> --out <dir>
 npm --prefix /opt/studio run film:depth -- --plate <plate.png> --out <dir>
 npm --prefix /opt/studio run film:edl -- --board <shots.json> --clips <dir> --words <words.json> --out <dir>
-npm --prefix /opt/studio run film:request -- --clip <clips/W01.json> --provider openrouter|higgsfield|unifically --ledger <ledger.jsonl> --out <dir> --start-artifact <id> [--window-artifact <id>] [--resolution 720p] [--rate-per-second X]
+npm --prefix /opt/studio run film:request -- --clip <clips/W01.json> --provider openrouter|higgsfield --ledger <ledger.jsonl> --out <dir> --start-artifact <id> [--window-artifact <id>] [--resolution 720p] [--rate-per-second X]
 npm --prefix /opt/studio run film:request -- --image <slot.json> --provider openrouter --ledger <ledger.jsonl> --out <dir> [--rate-per-image X]
 npm --prefix /opt/studio run film:request -- --song <song/tasks/T1.json> --provider unifically --ledger <ledger.jsonl> --out <dir> [--rate-per-task X]
 npm --prefix /opt/studio run film:request -- --wav <song/takes/S01.json> --provider unifically --ledger <ledger.jsonl> --out <dir>

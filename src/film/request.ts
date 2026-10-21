@@ -167,7 +167,9 @@ function outFolder(dir: string, flag: SpecFlag, specPath: string, ledgerPath: st
 function textProblem(spec: Record<string, any>, field: string, max: number): string | null {
   const value = spec[field];
   if (typeof value !== "string" || value.trim() === "") return `${shown(spec.id)} has no ${field}`;
-  return value.length > max ? `${shown(spec.id)} ${field} is ${value.length} characters, want 1 to ${max}` : null;
+  // Characters are code points, so an emoji counts once, not as its two UTF-16 units.
+  const length = [...value].length;
+  return length > max ? `${shown(spec.id)} ${field} is ${length} characters, want 1 to ${max}` : null;
 }
 
 // --song and --wav: a Unifically task and the WAV export of one of its takes.
@@ -292,6 +294,9 @@ async function main(): Promise<number> {
     ];
     const refused = unused.filter((name) => values[name] !== undefined);
     if (refused.length > 0) throw new Refused(refused.map((name) => `${flag} takes no --${name}`));
+  } else if (values["rate-per-task"] !== undefined) {
+    // A clip or an image is priced per second or per image: a task rate would be read and dropped.
+    throw new Refused([`${flag} takes no --rate-per-task`]);
   }
   if (values.resolution !== undefined && !RESOLUTIONS.includes(values.resolution)) {
     throw new Refused([`--resolution is ${shown(values.resolution)}, want 480p, 720p or 1080p`]);
