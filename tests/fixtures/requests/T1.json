@@ -1,0 +1,9 @@
+{
+  "id": "T1",
+  "kind": "song",
+  "title": "The city wakes",
+  "tags": "deadpan spoken verse, sung chorus, minimal drums",
+  "negative_tags": "metal",
+  "lyrics": "[Verse - spoken, deadpan]\nthe city wakes\nwe count the windows\n[Chorus - sung]\nhold on\nhold the light\n",
+  "takes": ["S01", "S02"]
+}

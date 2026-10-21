@@ -1,0 +1,21 @@
+{
+  "reference": "T1",
+  "kind": "song",
+  "provider": "unifically",
+  "model": "suno-ai/music",
+  "mode": "custom",
+  "attempt": 1,
+  "idempotency_key": "<key>",
+  "estimate": 0.06,
+  "rate_per_task": 0.06,
+  "takes": ["S01", "S02"],
+  "prompt_words": 19,
+  "request": "T1.request.json",
+  "poll": {
+    "method": "GET",
+    "url": "https://api.unifically.com/v1/tasks/{task_id}",
+    "body": null
+  },
+  "download": null,
+  "clips": "data.clips[]"
+}

@@ -22,6 +22,7 @@ function tempDir(): string {
 
 const VALID = {
   version: 1,
+  project: "city-wakes-a1b2c3",
   stage: "board",
   step: "audit",
   awaiting: { kind: "ask", id: "board-approval" },
@@ -99,6 +100,12 @@ const refusedFiles: [string, unknown, string][] = [
   ["an older version", { ...VALID, version: 0 }, "version is 0, want 1"],
   ["a newer version", { ...VALID, version: 2 }, "version is 2, want 1"],
   ["no version", without("version"), "version is missing"],
+  ["no project", without("project"), "project is missing"],
+  ["a project missing, the stage also wrong: project is named first", { ...without("project"), stage: "nowhere" }, "project is missing"],
+  ["a project in capitals", { ...VALID, project: "City Wakes" }, "project must match [a-z0-9][a-z0-9-]{0,63}"],
+  ["a project with a leading dash", { ...VALID, project: "-city" }, "project must match [a-z0-9][a-z0-9-]{0,63}"],
+  ["a project of 65 characters", { ...VALID, project: "a".repeat(65) }, "project must match [a-z0-9][a-z0-9-]{0,63}"],
+  ["a numeric project", { ...VALID, project: 7 }, "project must match [a-z0-9][a-z0-9-]{0,63}"],
   ["a partial file (no expects)", without("expects"), "expects is missing"],
   ["a partial file (no updated_at)", without("updated_at"), "updated_at is missing"],
   [
@@ -194,6 +201,7 @@ test("--set takes JSON for awaiting and expects, and repeated --set flags", () =
 // Each refused --set, its one line, and the file left exactly as it was.
 const refusedSets: [string[], string][] = [
   [["--set", "colour=red"], 'cannot set "colour": not a field of status.json'],
+  [["--set", "project=other-id"], "--set cannot set project"],
   [["--set", "version=2"], "version and updated_at are set by film:status, not --set"],
   [["--set", "updated_at=2030-01-01T00:00:00Z"], "version and updated_at are set by film:status, not --set"],
   [["--set", "stage"], '--set wants field=value, got "stage"'],

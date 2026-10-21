@@ -1,5 +1,40 @@
 # Changelog
 
+## v0.3.0, 2026-10-21
+
+Three changes to `film:request`, `film:ledger` and `film:status` (Film spec
+v1.4, section 6 and D3). `walk`, `render`, `changelog`, `routes.json`, the
+other `film:*` commands and the Remotion compositions are unchanged, so a claw
+pinned to v0.2.0 keeps working from this tree, except that `film:status`, and
+every ledger used with `film:request` or `film:ledger --asked`, now want
+`project` in `status.json`.
+
+### Changed
+
+- `film:request`: the idempotency key is the SHA-256 of
+  `{attempt, body, model, project, provider}`, so two productions of one brief
+  never share a key. `project` is read from the `status.json` beside
+  `--ledger`; `film:request` and `film:ledger --asked` (which recomputes the
+  key) refuse a ledger with no `status.json` beside it, or one without a valid
+  `project`.
+- `film:status`: `project`, the production's id (lowercase letters, digits and
+  dashes, the first not a dash, 64 at most), is the schema's second field. It
+  is required, minted once by the orchestrator when it writes the file, and
+  never set after: `--set project=...` is refused.
+
+### New
+
+- `film:request --song <song/tasks/T1.json>` and
+  `--wav <song/takes/S01.json>` on the new provider `unifically` (a hosted
+  wrapper for Suno): `--song` shapes the task that makes a song's two takes
+  (estimate $0.06, `--rate-per-task` overrides it), `--wav` the export of one
+  take as a WAV (estimate $0.01). Both write the usual request and meta files
+  and name `UNIFICALLY_API_KEY`. The poll envelope (`data.status`, `data.cost`,
+  `data.clips[]`, `data.wav_url`) is read from the provider's documentation
+  and is confirmed by the first live call. A task's title, tags and lyrics
+  are measured in characters (code points), so an emoji counts once, and
+  `--rate-per-task` is refused with `--clip` and `--image`.
+
 ## v0.2.0, 2026-10-15
 
 The film engine: the `film:*` commands that take a song from a scored lyric to

@@ -1,24 +1,29 @@
 import { before, test } from "node:test";
 import assert from "node:assert/strict";
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { film, lines } from "./fixtures/film.ts";
-import { boardDir } from "./fixtures/board.ts";
+import { PROJECT_ID, boardDir, writeStatus } from "./fixtures/board.ts";
 import { keyOf, requestsFixture as requests } from "./fixtures/requests.ts";
 
 // film:request shapes the input of the harness's call_external tool for one clip or image slot,
 // exactly as spec 8.2 has it: the secret's name, the provider's URL, the method, the body with
-// {{artifact:<id>}} placeholders, the estimate, the idempotency key (provider, model, body and
-// the attempt the ledger holds) and `return` (an asynchronous video job) or `fetch_to` (an
+// {{artifact:<id>}} placeholders, the estimate, the idempotency key (production id, provider, model,
+// body and the attempt the ledger holds) and `return` (an asynchronous video job) or `fetch_to` (an
 // image). Everything kit-side goes in <id>.request.meta.json: the reference, the attempt, the
 // rates, the poll and the download. It never calls anything. Both files are compared with
-// recorded ones.
+// recorded ones. --song and --wav shape a Unifically task (a Suno song of two takes) and the WAV
+// export of one take: the same two files, an asynchronous task polled until done.
 
 let dir = "";
 before(() => {
   dir = boardDir();
   cpSync(join(requests, "M01.json"), join(dir, "clips", "M01.json"));
   cpSync(join(requests, "P001.json"), join(dir, "P001.json"));
+  mkdirSync(join(dir, "song", "tasks"), { recursive: true });
+  mkdirSync(join(dir, "song", "takes"), { recursive: true });
+  cpSync(join(requests, "T1.json"), join(dir, "song", "tasks", "T1.json"));
+  cpSync(join(requests, "S01.json"), join(dir, "song", "takes", "S01.json"));
 });
 
 const golden = (name: string) => JSON.parse(readFileSync(join(requests, name), "utf8"));
@@ -52,7 +57,7 @@ test("a sung window on OpenRouter: reference mode, the recorded body, the key, t
   // the result URL the poll returns.
   assert.deepEqual(meta.poll, { method: "GET", url: "https://openrouter.ai/api/v1/videos/{id}", body: null });
   assert.deepEqual(meta.download, { from: "unsigned_urls[0]", fetch_to: "clips/W01/take-1.mp4" });
-  assert.equal(request.idempotency_key, keyOf("openrouter", "bytedance/seedance-2.5", request.body, 1));
+  assert.equal(request.idempotency_key, keyOf(PROJECT_ID, "openrouter", "bytedance/seedance-2.5", request.body, 1));
   // The lyric in plain quotes, no braces, no output settings in the prompt.
   assert.match(request.body.prompt, /"the city wakes we count the windows"/);
   assert.doesNotMatch(request.body.prompt, /[{}]|720p|16:9/);
@@ -61,8 +66,8 @@ test("a sung window on OpenRouter: reference mode, the recorded body, the key, t
   const report = readJson("or", "request-report.json");
   assert.equal(report.ok, true);
   assert.deepEqual(report.inputs, {
-    clip: join(dir, "clips", "W01.json"), image: null, provider: "openrouter", ledger: join(dir, "ledger.jsonl"),
-    start_artifact: "art-p-street", window_artifact: "art-W01-wav", rate_per_second: null, rate_per_image: null, resolution: null,
+    clip: join(dir, "clips", "W01.json"), image: null, song: null, wav: null, provider: "openrouter", ledger: join(dir, "ledger.jsonl"),
+    start_artifact: "art-p-street", window_artifact: "art-W01-wav", rate_per_second: null, rate_per_image: null, rate_per_task: null, resolution: null,
   });
   assert.deepEqual(report.outputs, { request: "W01.request.json", meta: "W01.request.meta.json", report: "request-report.json" });
   assert.equal(report.key, request.idempotency_key);
@@ -81,14 +86,14 @@ test("the same sung window on Higgsfield, and a motion clip on both providers", 
   const hf = film("request", dir, W01("higgsfield", "hf"));
   assert.equal(hf.status, 0, hf.stdout + hf.stderr);
   const { request } = matches("hf", "W01", "W01.higgsfield");
-  assert.equal(request.idempotency_key, keyOf("higgsfield", "bytedance/seedance-2.5", request.body, 1));
+  assert.equal(request.idempotency_key, keyOf(PROJECT_ID, "higgsfield", "bytedance/seedance-2.5", request.body, 1));
 
   for (const provider of ["openrouter", "higgsfield"]) {
     const result = film("request", dir, ["--clip", "clips/M01.json", "--provider", provider, "--ledger", "ledger.jsonl", "--out", `m-${provider}`, "--start-artifact", "art-p-roof"]);
     assert.equal(result.status, 0, result.stdout + result.stderr);
     const { request: motion } = matches(`m-${provider}`, "M01", `M01.${provider}`);
     assert.deepEqual(Object.keys(motion), INPUT("return"));
-    assert.equal(motion.idempotency_key, keyOf(provider, "bytedance/seedance-2.5", motion.body, 1));
+    assert.equal(motion.idempotency_key, keyOf(PROJECT_ID, provider, "bytedance/seedance-2.5", motion.body, 1));
   }
 });
 
@@ -100,7 +105,7 @@ test("an image slot on OpenRouter: the image model through chat completions, no 
   assert.deepEqual(Object.keys(request), INPUT("fetch_to"));
   assert.equal(request.fetch_to, "plates/cands/P001/1.json");
   assert.equal(meta.poll, null);
-  assert.equal(request.idempotency_key, keyOf("openrouter", "google/gemini-3-pro-image", request.body, 1));
+  assert.equal(request.idempotency_key, keyOf(PROJECT_ID, "openrouter", "google/gemini-3-pro-image", request.body, 1));
   assert.deepEqual(lines(result.stdout), [`request: "P001" image on openrouter, attempt 1, estimate $0.14, key ${request.idempotency_key.slice(0, 12)}`]);
   const over = film("request", dir, ["--image", "P001.json", "--provider", "openrouter", "--ledger", "ledger.jsonl", "--out", "img2", "--rate-per-image", "0.5"]);
   assert.equal(over.status, 0, over.stdout + over.stderr);
@@ -126,7 +131,7 @@ test("the key is deterministic; a new attempt in the ledger gives a new key and 
   assert.equal(secondMeta.attempt, 2);
   assert.equal(secondMeta.download.fetch_to, "clips/W01/take-2.mp4");
   assert.notEqual(second.idempotency_key, first.idempotency_key);
-  assert.equal(second.idempotency_key, keyOf("openrouter", "bytedance/seedance-2.5", second.body, 2));
+  assert.equal(second.idempotency_key, keyOf(PROJECT_ID, "openrouter", "bytedance/seedance-2.5", second.body, 2));
   // A failed attempt still counts: the attempt after it is 3.
   assert.equal(film("ledger", dir, ["--ledger", "keys.jsonl", "--out", ".", "--asked", "k3/W01.request.json"]).status, 0);
   assert.equal(film("ledger", dir, ["--ledger", "keys.jsonl", "--out", ".", "--failed", second.idempotency_key, "--reason", "HTTP 502"]).status, 0);
@@ -141,7 +146,7 @@ test("--resolution and --rate-per-second change the body, the estimate and the k
   const request = readJson("r1", "W01.request.json");
   assert.equal(request.body.resolution, "480p");
   assert.equal(request.estimate, 0.52); // 5 s at 0.103
-  assert.equal(request.idempotency_key, keyOf("openrouter", "bytedance/seedance-2.5", request.body, 1));
+  assert.equal(request.idempotency_key, keyOf(PROJECT_ID, "openrouter", "bytedance/seedance-2.5", request.body, 1));
   const rate = film("request", dir, W01("higgsfield", "r2", "ledger.jsonl", ["--resolution", "1080p", "--rate-per-second", "1.25"]));
   assert.equal(rate.status, 0, rate.stdout + rate.stderr);
   assert.equal(readJson("r2", "W01.request.json").estimate, 6.25);
@@ -161,6 +166,16 @@ test("a reference the ledger marks declined is refused on every provider", () =>
   }
   // Another reference is untouched.
   assert.equal(film("request", dir, ["--clip", "clips/M01.json", "--provider", "openrouter", "--ledger", "declined.jsonl", "--out", "d3", "--start-artifact", "art-p-roof"]).status, 0);
+  // A song task is closed the same way, on Unifically.
+  const song = ["--song", "song/tasks/T1.json", "--provider", "unifically", "--ledger", "declined.jsonl", "--out", "d4"];
+  assert.equal(film("request", dir, song).status, 0);
+  assert.equal(film("ledger", dir, ["--ledger", "declined.jsonl", "--out", ".", "--asked", "d4/T1.request.json"]).status, 0);
+  const songKey = readJson("d4", "T1.request.json").idempotency_key;
+  assert.equal(film("ledger", dir, ["--ledger", "declined.jsonl", "--out", ".", "--declined", songKey, "--reason", "lyrics filter"]).status, 0);
+  const closed = film("request", dir, [...song.slice(0, -1), "d5"]);
+  assert.equal(closed.status, 2, closed.stdout + closed.stderr);
+  assert.deepEqual(lines(closed.stdout), ['"T1" was declined on unifically: no request for it on any provider']);
+  assert.equal(existsSync(join(dir, "d5")), false);
 });
 
 // A copy of W01 changed by `change`, written as clips/<id>.json.
@@ -224,11 +239,20 @@ test("flag refusals: one line each, exit 2, nothing written", () => {
   writeFileSync(join(dir, "notjson.json"), "nope");
   writeFileSync(join(dir, "afile"), "");
   const sung = ["--clip", "clips/W01.json", "--ledger", "ledger.jsonl", "--out", "x"];
+  const T1 = ["--song", "song/tasks/T1.json", "--provider", "unifically", "--ledger", "ledger.jsonl", "--out", "x"];
   const arts = ["--start-artifact", "a1", "--window-artifact", "a2"];
   const cases: [string[], string][] = [
-    [["--clip", "clips/W01.json"], "film:request: --clip <clip.json> or --image <slot.json>, --provider, --ledger and --out are required"],
-    [[...sung, "--image", "P001.json", "--provider", "openrouter", ...arts], "film:request: give --clip or --image, not both"],
-    [[...sung, "--provider", "fal", ...arts], '--provider "fal" has no known URL (openrouter or higgsfield)'],
+    [["--clip", "clips/W01.json"], "film:request: --clip <clip.json>, --image <slot.json>, --song <task.json> or --wav <take.json>, --provider, --ledger and --out are required"],
+    [[...sung, "--image", "P001.json", "--provider", "openrouter", ...arts], "film:request: give exactly one of --clip, --image, --song or --wav"],
+    [[...sung, "--provider", "fal", ...arts], '--provider "fal" has no known URL (openrouter, higgsfield or unifically)'],
+    [[...T1, "--wav", "song/takes/S01.json"], "film:request: give exactly one of --clip, --image, --song or --wav"],
+    [[...sung, "--provider", "unifically", ...arts], '"W01" model "bytedance/seedance-2.5" has no known URL on unifically'],
+    [["--image", "P001.json", "--ledger", "ledger.jsonl", "--out", "x", "--provider", "unifically"], '"P001" model "google/gemini-3-pro-image" has no known URL on unifically'],
+    [[...T1, "--rate-per-task", "0"], '--rate-per-task is "0", want dollars above 0'],
+    [["--song", "song/tasks/nope.json", "--provider", "unifically", "--ledger", "ledger.jsonl", "--out", "x"], "--song cannot be read"],
+    [["--wav", "song/takes/S01.json", "--provider", "unifically", "--ledger", "ledger.jsonl", "--out", "x", "--rate-per-task", "0.5"], "--wav takes no --rate-per-task"],
+    [[...sung, "--provider", "openrouter", ...arts, "--rate-per-task", "0.5"], "--clip takes no --rate-per-task"],
+    [["--image", "P001.json", "--ledger", "ledger.jsonl", "--out", "x", "--provider", "openrouter", "--rate-per-task", "0.5"], "--image takes no --rate-per-task"],
     [["--image", "P001.json", "--ledger", "ledger.jsonl", "--out", "x", "--provider", "higgsfield"], '"P001" model "google/gemini-3-pro-image" has no known URL on higgsfield'],
     [[...sung, "--provider", "openrouter", "--start-artifact", "a1"], '"W01" is sung: --window-artifact is required'],
     [[...sung, "--provider", "openrouter", "--window-artifact", "a2"], "--start-artifact is required for a clip"],
@@ -263,9 +287,182 @@ test("flag refusals: one line each, exit 2, nothing written", () => {
   assert.deepEqual(lines(named.stdout), ['--clip: "W09.json" holds clip "W01"']);
 });
 
+test("a song task on Unifically: the recorded body, two takes, the estimate, the poll, no download", () => {
+  const result = film("request", dir, ["--song", "song/tasks/T1.json", "--provider", "unifically", "--ledger", "ledger.jsonl", "--out", "song/requests"]);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(result.stderr, "");
+  const { request, meta } = matches("song/requests", "T1", "T1.unifically");
+  assert.deepEqual(Object.keys(request), INPUT("return"));
+  assert.equal(request.body.model, "suno-ai/music");
+  assert.equal(request.body.input.custom, true);
+  assert.equal(request.estimate, 0.06);
+  assert.deepEqual(meta.takes, ["S01", "S02"]);
+  assert.deepEqual(meta.poll, { method: "GET", url: "https://api.unifically.com/v1/tasks/{task_id}", body: null });
+  assert.equal(meta.download, null);
+  assert.equal(request.idempotency_key, keyOf(PROJECT_ID, "unifically", "suno-ai/music", request.body, 1));
+  assert.deepEqual(lines(result.stdout), [`request: "T1" song on unifically, attempt 1, 2 takes, estimate $0.06, key ${request.idempotency_key.slice(0, 12)}`]);
+  const report = readJson("song/requests", "request-report.json");
+  assert.equal(report.ok, true);
+  assert.equal(report.inputs.song, join(dir, "song", "tasks", "T1.json"));
+  assert.equal(report.inputs.clip, null);
+  assert.equal(report.fetch_to, null);
+  assert.deepEqual(report.outputs, { request: "T1.request.json", meta: "T1.request.meta.json", report: "request-report.json" });
+  assert.deepEqual(readdirSync(join(dir, "song", "requests")).sort(), ["T1.request.json", "T1.request.meta.json", "request-report.json"]);
+
+  // --rate-per-task overrides the rate and the estimate, and the body is unchanged.
+  const over = film("request", dir, ["--song", "song/tasks/T1.json", "--provider", "unifically", "--ledger", "ledger.jsonl", "--out", "song/over", "--rate-per-task", "0.12"]);
+  assert.equal(over.status, 0, over.stdout + over.stderr);
+  assert.equal(readJson("song/over", "T1.request.json").estimate, 0.12);
+  assert.equal(readJson("song/over", "T1.request.meta.json").rate_per_task, 0.12);
+  assert.deepEqual(readJson("song/over", "T1.request.json").body, request.body);
+  assert.equal(readJson("song/over", "request-report.json").inputs.rate_per_task, 0.12);
+});
+
+test("a WAV export on Unifically: the clip id, the floor estimate, the download to song/<take>.wav", () => {
+  const result = film("request", dir, ["--wav", "song/takes/S01.json", "--provider", "unifically", "--ledger", "ledger.jsonl", "--out", "song/requests"]);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const { request, meta } = matches("song/requests", "S01", "S01.unifically");
+  assert.deepEqual(Object.keys(request), INPUT("return"));
+  assert.deepEqual(request.body, { model: "suno-ai/wav", input: { clip_id: "1901ec96-72c6-4c26-8e56-91028ca6070d" } });
+  assert.equal(request.estimate, 0.01);
+  assert.deepEqual(meta.download, { from: "data.wav_url", fetch_to: "song/S01.wav" });
+  assert.equal(request.idempotency_key, keyOf(PROJECT_ID, "unifically", "suno-ai/wav", request.body, 1));
+  assert.deepEqual(lines(result.stdout), [`request: "S01" wav on unifically, attempt 1, estimate $0.01, key ${request.idempotency_key.slice(0, 12)}`]);
+  const report = readJson("song/requests", "request-report.json");
+  assert.equal(report.inputs.wav, join(dir, "song", "takes", "S01.json"));
+  assert.equal(report.fetch_to, "song/S01.wav");
+});
+
+test("--song and --wav refusals: another provider, a clip flag, a bad takes list", () => {
+  for (const [args, line] of [
+    [["--song", "song/tasks/T1.json", "--provider", "openrouter"], "--song is answered by unifically only"],
+    [["--wav", "song/takes/S01.json", "--provider", "higgsfield"], "--wav is answered by unifically only"],
+    [["--song", "song/tasks/T1.json", "--provider", "unifically", "--resolution", "720p"], "--song takes no --resolution"],
+    [["--wav", "song/takes/S01.json", "--provider", "unifically", "--start-artifact", "x"], "--wav takes no --start-artifact"],
+  ] as [string[], string][]) {
+    const result = film("request", dir, [...args, "--ledger", "ledger.jsonl", "--out", "refused"]);
+    assert.equal(result.status, 2, args.join(" "));
+    assert.deepEqual(lines(result.stdout), [line], args.join(" "));
+    assert.equal(existsSync(join(dir, "refused")), false);
+  }
+  // Every flag a song or a WAV export has no use for, one line each.
+  const all = film("request", dir, [
+    "--song", "song/tasks/T1.json", "--provider", "unifically", "--ledger", "ledger.jsonl", "--out", "refused",
+    "--start-artifact", "a1", "--window-artifact", "a2", "--resolution", "720p", "--rate-per-second", "1", "--rate-per-image", "1",
+  ]);
+  assert.equal(all.status, 2);
+  assert.deepEqual(lines(all.stdout), [
+    "--song takes no --start-artifact", "--song takes no --window-artifact", "--song takes no --resolution",
+    "--song takes no --rate-per-second", "--song takes no --rate-per-image",
+  ]);
+  assert.equal(existsSync(join(dir, "refused")), false);
+});
+
+// A song task or a take file changed by `change`, written as <folder>/<id>.json.
+function taskVariant(folder: string, id: string, base: string, change: (file: Record<string, any>) => void): string {
+  const file = JSON.parse(readFileSync(join(requests, base), "utf8"));
+  file.id = id;
+  change(file);
+  mkdirSync(join(dir, folder), { recursive: true });
+  writeFileSync(join(dir, folder, `${id}.json`), JSON.stringify(file));
+  return `${folder}/${id}.json`;
+}
+
+test("a song task's fields and a take's are refusals: one line each, exit 2, nothing written", () => {
+  const song = (id: string, change: (f: Record<string, any>) => void) => ["--song", taskVariant("song/tasks", id, "T1.json", change)];
+  const wav = (id: string, change: (f: Record<string, any>) => void) => ["--wav", taskVariant("song/takes", id, "S01.json", change)];
+  const cases: [string[], string[]][] = [
+    [song("T9", (f) => (f.takes = ["S01"])), ['"T9" takes wants exactly two keys like S01']],
+    [song("T10", (f) => (f.takes = ["S01", "S01"])), ['"T10" takes wants exactly two keys like S01']],
+    [song("T11", (f) => (f.takes = ["S01", "take2"])), ['"T11" takes wants exactly two keys like S01']],
+    [song("T12", (f) => (f.takes = "S01,S02")), ['"T12" takes wants exactly two keys like S01']],
+    [song("T13", (f) => { delete f.title; delete f.tags; delete f.lyrics; }), ['"T13" has no title', '"T13" has no tags', '"T13" has no lyrics']],
+    [song("T14", (f) => (f.title = "t".repeat(81))), ['"T14" title is 81 characters, want 1 to 80']],
+    [song("T15", (f) => (f.tags = "t".repeat(1001))), ['"T15" tags is 1001 characters, want 1 to 1000']],
+    [song("T16", (f) => (f.lyrics = "l".repeat(5001))), ['"T16" lyrics is 5001 characters, want 1 to 5000']],
+    // Counted in code points: 81 emoji are 81 characters, not 162.
+    [song("T21", (f) => (f.title = "\u{1F3B5}".repeat(81))), ['"T21" title is 81 characters, want 1 to 80']],
+    [song("T17", (f) => (f.lyrics = "   ")), ['"T17" has no lyrics']],
+    [song("T18", (f) => delete f.negative_tags), ['"T18" negative_tags is undefined, want a string (may be empty)']],
+    [song("T19", (f) => (f.negative_tags = 7)), ['"T19" negative_tags is 7, want a string (may be empty)']],
+    [song("T20", (f) => (f.kind = "wav")), ['"T20" kind is "wav", want song']],
+    [wav("S02", (f) => (f.kind = "song")), ['"S02" kind is "song", want wav']],
+    [wav("S03", (f) => delete f.clip_id), ['"S03" has no clip_id']],
+    [wav("S04", (f) => (f.task_id = "a b")), ['"S04" task_id wants letters, digits, . _ - (up to 128)']],
+    [wav("S05", (f) => (f.clip_id = "x".repeat(129))), ['"S05" clip_id wants letters, digits, . _ - (up to 128)']],
+    [wav("S06", (f) => { f.clip_id = 7; delete f.task_id; }), ['"S06" has no clip_id', '"S06" has no task_id']],
+  ];
+  for (const [flags, want] of cases) {
+    const result = film("request", dir, [...flags, "--provider", "unifically", "--ledger", "ledger.jsonl", "--out", "x"]);
+    assert.equal(result.status, 2, `${flags.join(" ")}: ${result.stdout}${result.stderr}`);
+    assert.deepEqual(lines(result.stdout), want, flags.join(" "));
+    assert.equal(existsSync(join(dir, "x")), false);
+  }
+  // A task file whose id is not its file name, and a file that is no task at all.
+  cpSync(join(dir, "song", "tasks", "T1.json"), join(dir, "song", "tasks", "T2.json"));
+  const named = film("request", dir, ["--song", "song/tasks/T2.json", "--provider", "unifically", "--ledger", "ledger.jsonl", "--out", "x"]);
+  assert.equal(named.status, 2);
+  assert.deepEqual(lines(named.stdout), ['--song: "T2.json" holds song task "T1"']);
+  writeFileSync(join(dir, "song", "takes", "S07.json"), "nope");
+  const bad = film("request", dir, ["--wav", "song/takes/S07.json", "--provider", "unifically", "--ledger", "ledger.jsonl", "--out", "x"]);
+  assert.deepEqual(lines(bad.stdout), ["--wav is not a take file"]);
+});
+
+test("a song's lyrics are the prompt as written; the next attempt is a new key", () => {
+  const first = film("request", dir, ["--song", "song/tasks/T1.json", "--provider", "unifically", "--ledger", "sk.jsonl", "--out", "sk1"]);
+  assert.equal(first.status, 0, first.stdout + first.stderr);
+  assert.equal(film("ledger", dir, ["--ledger", "sk.jsonl", "--out", ".", "--asked", "sk1/T1.request.json"]).status, 0);
+  const second = film("request", dir, ["--song", "song/tasks/T1.json", "--provider", "unifically", "--ledger", "sk.jsonl", "--out", "sk2"]);
+  assert.equal(second.status, 0, second.stdout + second.stderr);
+  assert.equal(readJson("sk2", "T1.request.meta.json").attempt, 2);
+  assert.notEqual(readJson("sk2", "T1.request.json").idempotency_key, readJson("sk1", "T1.request.json").idempotency_key);
+  assert.equal(readJson("sk1", "T1.request.json").body.input.prompt, readJson("song", "tasks", "T1.json").lyrics);
+});
+
+test("the key is derived from the production id: two productions of one brief never share a key", () => {
+  const other = boardDir();
+  writeStatus(other, "city-wakes-b2c3d4");
+  const a = film("request", dir, W01("openrouter", "ka"));
+  const b = film("request", other, W01("openrouter", "kb"));
+  assert.equal(a.status, 0, a.stdout + a.stderr);
+  assert.equal(b.status, 0, b.stdout + b.stderr);
+  const first = readJson("ka", "W01.request.json");
+  const second = JSON.parse(readFileSync(join(other, "kb", "W01.request.json"), "utf8"));
+  assert.deepEqual(first.body, second.body);
+  assert.notEqual(first.idempotency_key, second.idempotency_key);
+  assert.equal(first.idempotency_key, keyOf(PROJECT_ID, "openrouter", "bytedance/seedance-2.5", first.body, 1));
+  assert.equal(second.idempotency_key, keyOf("city-wakes-b2c3d4", "openrouter", "bytedance/seedance-2.5", second.body, 1));
+});
+
+test("a ledger with no status.json beside it, or one without a project, is refused", () => {
+  const noFile = boardDir();
+  rmSync(join(noFile, "status.json"));
+  const missing = film("request", noFile, W01("openrouter", "np"));
+  assert.equal(missing.status, 2);
+  assert.deepEqual(lines(missing.stdout), ["status.json beside --ledger has no project: run film:status on it"]);
+  assert.equal(existsSync(join(noFile, "np")), false);
+
+  const bad: [string, string][] = [
+    ["not JSON", "{ nope"],
+    ["no project", JSON.stringify({ version: 1 })],
+    ["a numeric project", JSON.stringify({ project: 7 })],
+    ["a project in capitals", JSON.stringify({ project: "City-Wakes" })],
+    ["a project with a leading dash", JSON.stringify({ project: "-city" })],
+    ["a project of 65 characters", JSON.stringify({ project: "a".repeat(65) })],
+  ];
+  for (const [label, text] of bad) {
+    const folder = boardDir();
+    writeFileSync(join(folder, "status.json"), text);
+    const result = film("request", folder, W01("openrouter", "np"));
+    assert.equal(result.status, 2, label);
+    assert.deepEqual(lines(result.stdout), ["status.json beside --ledger has no project: run film:status on it"], label);
+    assert.equal(existsSync(join(folder, "np")), false, label);
+  }
+});
+
 test("a --ledger at the request's own output paths is refused before any write", () => {
   const arts = ["--start-artifact", "a1", "--window-artifact", "a2"];
-  mkdirSync(join(dir, "lq"), { recursive: true });
+  writeStatus(join(dir, "lq"));
   for (const named of ["W01.request.json", "W01.request.meta.json"]) {
     // An empty ledger (no rows yet) sitting where the request would write.
     writeFileSync(join(dir, "lq", named), "");
@@ -274,12 +471,13 @@ test("a --ledger at the request's own output paths is refused before any write",
     assert.deepEqual(lines(result.stdout), [`--ledger is ${JSON.stringify(named)} in --out: the request would overwrite it`]);
     assert.equal(readFileSync(join(dir, "lq", named), "utf8"), "");
   }
-  assert.deepEqual(readdirSync(join(dir, "lq")).sort(), ["W01.request.json", "W01.request.meta.json"]);
-  // A ledger not made yet, at that path in an --out not made yet, is refused the same way.
+  assert.deepEqual(readdirSync(join(dir, "lq")).sort(), ["W01.request.json", "W01.request.meta.json", "status.json"]);
+  // A ledger not made yet, at that path, is refused the same way.
+  writeStatus(join(dir, "lq2"));
   const fresh = film("request", dir, ["--clip", "clips/W01.json", "--ledger", "lq2/W01.request.meta.json", "--out", "lq2", "--provider", "openrouter", ...arts]);
   assert.equal(fresh.status, 2, fresh.stdout + fresh.stderr);
   assert.deepEqual(lines(fresh.stdout), ['--ledger is "W01.request.meta.json" in --out: the request would overwrite it']);
-  assert.equal(existsSync(join(dir, "lq2")), false);
+  assert.deepEqual(readdirSync(join(dir, "lq2")), ["status.json"]);
 });
 
 test("a sung prompt over about 90 words is a warning, not a refusal", () => {
@@ -310,4 +508,11 @@ test("anything unexpected is exit 1 with one line on stderr", () => {
   assert.equal(result.stdout, "");
   assert.deepEqual(lines(result.stderr), ["film:request: unexpected failure"]);
   assert.equal(existsSync(join(dir, "blocked", "request-report.json")), false);
+});
+
+test("a song title of 80 emoji is 80 characters and is shaped", () => {
+  const task = taskVariant("song/tasks", "T22", "T1.json", (f) => (f.title = "\u{1F3B5}".repeat(80)));
+  const result = film("request", dir, ["--song", task, "--provider", "unifically", "--ledger", "ledger.jsonl", "--out", "song/emoji"]);
+  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+  assert.equal(readJson("song/emoji", "T22.request.json").body.input.title, "\u{1F3B5}".repeat(80));
 });

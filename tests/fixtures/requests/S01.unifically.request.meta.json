@@ -1,0 +1,22 @@
+{
+  "reference": "S01",
+  "kind": "wav",
+  "provider": "unifically",
+  "model": "suno-ai/wav",
+  "mode": "export",
+  "attempt": 1,
+  "idempotency_key": "<key>",
+  "estimate": 0.01,
+  "clip_id": "1901ec96-72c6-4c26-8e56-91028ca6070d",
+  "task_id": "abc123def456",
+  "request": "S01.request.json",
+  "poll": {
+    "method": "GET",
+    "url": "https://api.unifically.com/v1/tasks/{task_id}",
+    "body": null
+  },
+  "download": {
+    "from": "data.wav_url",
+    "fetch_to": "song/S01.wav"
+  }
+}
