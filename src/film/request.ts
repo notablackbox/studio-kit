@@ -287,7 +287,9 @@ async function main(): Promise<number> {
     if (provider !== "unifically") throw new Refused([`${flag} is answered by unifically only`]);
     // A song or a WAV export has no plate, window, resolution or per-second price; a WAV export's
     // estimate is the floor, so it has no per-task rate either.
-    const unused = ["start-artifact", "window-artifact", "resolution", "rate-per-second", "rate-per-image", ...(flag === "--wav" ? ["rate-per-task"] : [])] as const;
+    const unused: ("start-artifact" | "window-artifact" | "resolution" | "rate-per-second" | "rate-per-image" | "rate-per-task")[] = [
+      "start-artifact", "window-artifact", "resolution", "rate-per-second", "rate-per-image", ...(flag === "--wav" ? (["rate-per-task"] as const) : []),
+    ];
     const refused = unused.filter((name) => values[name] !== undefined);
     if (refused.length > 0) throw new Refused(refused.map((name) => `${flag} takes no --${name}`));
   }
