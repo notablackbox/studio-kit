@@ -18,6 +18,15 @@ import { idempotencyKey, readLedger, readProject, stateOf } from "./lib/ledger.t
 // wiki's rules: a sung window of 4 to 8 s, the lyric in plain quotes (braces made the model
 // re-sing), output settings in the request and never in the prompt, a short sung prompt.
 // The URLs and rates are as documented on 2026-10-14; re-read them before any spend.
+//
+// --song and --wav are the same two files for Unifically, a hosted wrapper for Suno, as read on
+// 2026-10-21: POST https://api.unifically.com/v1/tasks with {model, input}: suno-ai/music takes
+// {mv, custom, prompt (the lyrics), tags, negative_tags, title, make_instrumental} and answers two
+// clips in one task; suno-ai/wav takes {clip_id} and answers a WAV. Both are polled at GET
+// /v1/tasks/{task_id}, and the answer is read as an envelope {data: {status, cost, clips[],
+// wav_url}}: that envelope is confirmed on the first live call. A song task is estimated at
+// SONG_RATE a task; a WAV export at WAV_ESTIMATE, the floor call_external accepts as an estimate
+// (Film spec v1.4, section 6).
 
 const COMMAND = "film:request";
 const SUNG_WORDS_MAX = 110;
@@ -27,9 +36,15 @@ const WINDOW_MAX = 8;
 const RESOLUTIONS = ["480p", "720p", "1080p"];
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const ARTIFACT = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const TAKE = /^S\d{2}$/;
+const SUNO_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const SONG_RATE = 0.06;
+const WAV_ESTIMATE = 0.01;
 
-type Provider = "openrouter" | "higgsfield";
-const SECRETS: Record<Provider, string> = { openrouter: "OPENROUTER_API_KEY", higgsfield: "HIGGSFIELD_API_KEY" };
+type Provider = "openrouter" | "higgsfield" | "unifically";
+type SpecFlag = "--clip" | "--image" | "--song" | "--wav";
+const SECRETS: Record<Provider, string> = { openrouter: "OPENROUTER_API_KEY", higgsfield: "HIGGSFIELD_API_KEY", unifically: "UNIFICALLY_API_KEY" };
+const SPEC_WORD: Record<SpecFlag, string> = { "--clip": "clip", "--image": "image slot", "--song": "song task", "--wav": "take" };
 
 // Where each model is asked, per provider. OpenRouter: one video endpoint for every video
 // model (POST /api/v1/videos, polled at /api/v1/videos/{id}, fetched from .../content), and
@@ -53,7 +68,11 @@ const VIDEO_MODELS: Record<Provider, Record<string, { reference: Route; first_fr
       first_frame: higgsfield("bytedance/seedance-2.5", "image-to-video"),
     },
   },
+  unifically: {},
 };
+// Unifically's one task endpoint, polled by task id; the WAV's result URL is data.wav_url.
+const UNIFICALLY_SONG: Route = { url: "https://api.unifically.com/v1/tasks", poll: "https://api.unifically.com/v1/tasks/{task_id}", from: null };
+const UNIFICALLY_WAV: Route = { ...UNIFICALLY_SONG, from: "data.wav_url" };
 const IMAGE_MODELS: Partial<Record<Provider, Record<string, Route>>> = {
   openrouter: { "google/gemini-3-pro-image": OPENROUTER_CHAT },
 };
@@ -64,6 +83,7 @@ const IMAGE_MODELS: Partial<Record<Provider, Record<string, Route>>> = {
 const VIDEO_RATES: Record<Provider, Record<string, Record<string, number>>> = {
   openrouter: { "bytedance/seedance-2.5": { "480p": 0.103, "720p": 0.231 } },
   higgsfield: { "bytedance/seedance-2.5": { "720p": 0.7 } },
+  unifically: {},
 };
 const IMAGE_RATES: Partial<Record<Provider, Record<string, number>>> = {
   openrouter: { "google/gemini-3-pro-image": 0.14 },
@@ -102,25 +122,148 @@ function sungPrompt(words: string, prompt: string): string {
   ].join(" ");
 }
 
-function readSpec(path: string, flag: "--clip" | "--image"): Record<string, any> {
+function readSpec(path: string, flag: SpecFlag): Record<string, any> {
   let value: unknown;
   try {
     value = JSON.parse(readFileSync(path, "utf8"));
   } catch {
     value = null;
   }
-  const what = flag === "--clip" ? "clip" : "image slot";
-  if (!isObject(value)) throw new Refused([`${flag} is not a${flag === "--clip" ? "" : "n"} ${what} file`]);
+  const what = SPEC_WORD[flag];
+  if (!isObject(value)) throw new Refused([`${flag} is not a${/^[aeiou]/.test(what) ? "n" : ""} ${what} file`]);
   const file = basename(path);
   if (typeof value.id !== "string" || !ID.test(value.id)) throw new Refused([`${flag}: ${shown(file)} has no id that names a file`]);
   if (file.replace(/\.json$/i, "") !== value.id) throw new Refused([`${flag}: ${shown(file)} holds ${what} ${shown(value.id)}`]);
   return value;
 }
 
+// The ledger's side of a request: the production id, and the attempt after the ones asked.
+function askedAttempt(ledger: string, id: string): { ledgerPath: string; project: string; attempt: number } {
+  const ledgerPath = fromCaller(ledger);
+  const state = stateOf(readLedger(ledgerPath), id);
+  const project = readProject(ledgerPath);
+  if (state.declined_on.length > 0) throw new Refused([`${shown(id)} was declined on ${state.declined_on.join(" and ")}: no request for it on any provider`]);
+  return { ledgerPath, project, attempt: state.attempts + 1 };
+}
+
+// --out, refused before any write when it is not a folder or when an input sits where the request
+// would write.
+function outFolder(dir: string, flag: SpecFlag, specPath: string, ledgerPath: string, id: string): string {
+  const out = fromCaller(dir);
+  const problem = outProblem(out);
+  if (problem) throw new Refused([problem]);
+  refuseReportPaths(out, "request", [[flag, specPath], ["--ledger", ledgerPath]]);
+  // Nor may an input be one of the two files the request writes in --out by its reference.
+  const overwritten = ([[flag, specPath], ["--ledger", ledgerPath]] as [string, string][]).flatMap(([name, path]) =>
+    [`${id}.request.json`, `${id}.request.meta.json`]
+      .filter((named) => isOutPath(path, out, named))
+      .map((named) => `${name} is ${shown(named)} in --out: the request would overwrite it`),
+  );
+  if (overwritten.length > 0) throw new Refused(overwritten);
+  return out;
+}
+
+// A string field of a song task: present, and 1 to `max` characters.
+function textProblem(spec: Record<string, any>, field: string, max: number): string | null {
+  const value = spec[field];
+  if (typeof value !== "string" || value.trim() === "") return `${shown(spec.id)} has no ${field}`;
+  return value.length > max ? `${shown(spec.id)} ${field} is ${value.length} characters, want 1 to ${max}` : null;
+}
+
+// --song and --wav: a Unifically task and the WAV export of one of its takes.
+function taskRequest(flag: "--song" | "--wav", spec: Record<string, any>, specPath: string, ledger: string, out: string, ratePerTask: number | null): number {
+  const song = flag === "--song";
+  const id: string = spec.id;
+  const kind = song ? "song" : "wav";
+  if (spec.kind !== kind) throw new Refused([`${shown(id)} kind is ${shown(spec.kind)}, want ${kind}`]);
+  const problems: string[] = [];
+  if (song) {
+    problems.push(...[textProblem(spec, "title", 80), textProblem(spec, "tags", 1000), textProblem(spec, "lyrics", 5000)].filter((p) => p !== null));
+    if (typeof spec.negative_tags !== "string") problems.push(`${shown(id)} negative_tags is ${shown(spec.negative_tags)}, want a string (may be empty)`);
+    const takes = spec.takes;
+    if (!Array.isArray(takes) || takes.length !== 2 || takes[0] === takes[1] || takes.some((t: unknown) => typeof t !== "string" || !TAKE.test(t))) {
+      problems.push(`${shown(id)} takes wants exactly two keys like S01`);
+    }
+  } else {
+    for (const field of ["clip_id", "task_id"]) {
+      const value = spec[field];
+      if (typeof value !== "string" || value === "") problems.push(`${shown(id)} has no ${field}`);
+      else if (!SUNO_ID.test(value)) problems.push(`${shown(id)} ${field} wants letters, digits, . _ - (up to 128)`);
+    }
+  }
+  if (problems.length > 0) throw new Refused(problems);
+
+  const { ledgerPath, project, attempt } = askedAttempt(ledger, id);
+  const outDir = outFolder(out, flag, specPath, ledgerPath, id);
+
+  const modelId = song ? "suno-ai/music" : "suno-ai/wav";
+  const rate = song ? (ratePerTask ?? SONG_RATE) : WAV_ESTIMATE;
+  const estimate = cents(rate);
+  const route = song ? UNIFICALLY_SONG : UNIFICALLY_WAV;
+  const requestBody = song
+    ? {
+        model: modelId,
+        input: { mv: "chirp-hawk", custom: true, prompt: spec.lyrics, tags: spec.tags, negative_tags: spec.negative_tags, title: spec.title, make_instrumental: false },
+      }
+    : { model: modelId, input: { clip_id: spec.clip_id } };
+  const key = idempotencyKey(project, "unifically", modelId, requestBody, attempt);
+  const fetchTo = song ? null : `song/${id}.wav`;
+  const request = { secret: SECRETS.unifically, url: route.url, method: "POST", body: requestBody, estimate, idempotency_key: key, return: true };
+  const name = `${id}.request.json`;
+  const metaName = `${id}.request.meta.json`;
+  const meta = {
+    reference: id,
+    kind,
+    provider: "unifically",
+    model: modelId,
+    mode: song ? "custom" : "export",
+    attempt,
+    idempotency_key: key,
+    estimate,
+    ...(song
+      ? { rate_per_task: rate, takes: spec.takes, prompt_words: wordCount(spec.lyrics) }
+      : { clip_id: spec.clip_id, task_id: spec.task_id }),
+    request: name,
+    poll: { method: "GET", url: route.poll, body: null },
+    download: fetchTo === null ? null : { from: route.from, fetch_to: fetchTo },
+    ...(song ? { clips: "data.clips[]" } : {}),
+  };
+  writeIn(outDir, name, JSON.stringify(request, null, 2) + "\n");
+  writeIn(outDir, metaName, JSON.stringify(meta, null, 2) + "\n");
+  writeReport(outDir, "request", {
+    ok: true,
+    inputs: {
+      clip: null,
+      image: null,
+      song: song ? specPath : null,
+      wav: song ? null : specPath,
+      provider: "unifically",
+      ledger: ledgerPath,
+      start_artifact: null,
+      window_artifact: null,
+      rate_per_second: null,
+      rate_per_image: null,
+      rate_per_task: ratePerTask,
+      resolution: null,
+    },
+    outputs: { request: name, meta: metaName, report: "request-report.json" },
+    reference: id,
+    key,
+    estimate,
+    attempt,
+    fetch_to: fetchTo,
+    warnings: [],
+  });
+  console.log(`request: ${shown(id)} ${kind} on unifically, attempt ${attempt}${song ? `, ${spec.takes.length} takes` : ""}, estimate ${money(estimate)}, key ${key.slice(0, 12)}`);
+  return EXIT.done;
+}
+
 async function main(): Promise<number> {
   const { values } = parseFlags(COMMAND, {
     clip: { type: "string" },
     image: { type: "string" },
+    song: { type: "string" },
+    wav: { type: "string" },
     provider: { type: "string" },
     ledger: { type: "string" },
     out: { type: "string" },
@@ -128,34 +271,48 @@ async function main(): Promise<number> {
     "window-artifact": { type: "string" },
     "rate-per-second": { type: "string" },
     "rate-per-image": { type: "string" },
+    "rate-per-task": { type: "string" },
     resolution: { type: "string" },
   });
-  if ((!values.clip && !values.image) || !values.provider || !values.ledger || !values.out) {
-    throw new Refused([`${COMMAND}: --clip <clip.json> or --image <slot.json>, --provider, --ledger and --out are required`]);
+  const given = ([["--clip", values.clip], ["--image", values.image], ["--song", values.song], ["--wav", values.wav]] as [SpecFlag, string | undefined][]).filter(([, path]) => path !== undefined);
+  if (given.length === 0 || !values.provider || !values.ledger || !values.out) {
+    throw new Refused([`${COMMAND}: --clip <clip.json>, --image <slot.json>, --song <task.json> or --wav <take.json>, --provider, --ledger and --out are required`]);
   }
-  if (values.clip && values.image) throw new Refused([`${COMMAND}: give --clip or --image, not both`]);
-  if (!(values.provider in SECRETS)) throw new Refused([`--provider ${shown(values.provider)} has no known URL (openrouter or higgsfield)`]);
+  if (given.length > 1) throw new Refused([`${COMMAND}: give exactly one of --clip, --image, --song or --wav`]);
+  const [flag, flagPath] = given[0];
+  const isTask = flag === "--song" || flag === "--wav";
+  if (!(values.provider in SECRETS)) throw new Refused([`--provider ${shown(values.provider)} has no known URL (openrouter, higgsfield or unifically)`]);
   const provider = values.provider as Provider;
+  if (isTask) {
+    if (provider !== "unifically") throw new Refused([`${flag} is answered by unifically only`]);
+    // A song or a WAV export has no plate, window, resolution or per-second price; a WAV export's
+    // estimate is the floor, so it has no per-task rate either.
+    const unused = ["start-artifact", "window-artifact", "resolution", "rate-per-second", "rate-per-image", ...(flag === "--wav" ? ["rate-per-task"] : [])] as const;
+    const refused = unused.filter((name) => values[name] !== undefined);
+    if (refused.length > 0) throw new Refused(refused.map((name) => `${flag} takes no --${name}`));
+  }
   if (values.resolution !== undefined && !RESOLUTIONS.includes(values.resolution)) {
     throw new Refused([`--resolution is ${shown(values.resolution)}, want 480p, 720p or 1080p`]);
   }
-  const rateFlag = (flag: "rate-per-second" | "rate-per-image"): number | null => {
-    const text = values[flag];
+  const rateFlag = (name: "rate-per-second" | "rate-per-image" | "rate-per-task"): number | null => {
+    const text = values[name];
     if (text === undefined) return null;
     const rate = Number(text);
-    if (!/^\d+(\.\d+)?$/.test(text) || !Number.isFinite(rate) || !(rate > 0)) throw new Refused([`--${flag} is ${shown(text)}, want dollars above 0`]);
+    if (!/^\d+(\.\d+)?$/.test(text) || !Number.isFinite(rate) || !(rate > 0)) throw new Refused([`--${name} is ${shown(text)}, want dollars above 0`]);
     return rate;
   };
   const ratePerSecond = rateFlag("rate-per-second");
   const ratePerImage = rateFlag("rate-per-image");
-  for (const flag of ["start-artifact", "window-artifact"] as const) {
-    const id = values[flag];
-    if (id !== undefined && !ARTIFACT.test(id)) throw new Refused([`--${flag} wants an artifact id (letters, digits, . _ : -)`]);
+  const ratePerTask = rateFlag("rate-per-task");
+  for (const name of ["start-artifact", "window-artifact"] as const) {
+    const id = values[name];
+    if (id !== undefined && !ARTIFACT.test(id)) throw new Refused([`--${name} wants an artifact id (letters, digits, . _ : -)`]);
   }
 
-  const isClip = values.clip !== undefined;
-  const specPath = isClip ? requireFile(fromCaller(values.clip!), "--clip") : requireFile(fromCaller(values.image!), "--image");
-  const spec = readSpec(specPath, isClip ? "--clip" : "--image");
+  const specPath = requireFile(fromCaller(flagPath!), flag);
+  const spec = readSpec(specPath, flag);
+  if (flag === "--song" || flag === "--wav") return taskRequest(flag, spec, specPath, values.ledger, values.out, ratePerTask);
+  const isClip = flag === "--clip";
   const id: string = spec.id;
   const start = values["start-artifact"];
   const windowArtifact = values["window-artifact"];
@@ -245,23 +402,8 @@ async function main(): Promise<number> {
   const estimate = cents(kind === "image" ? rate : duration * rate);
 
   // The ledger: a declined reference is closed on every provider; the attempt is the next one.
-  const ledgerPath = fromCaller(values.ledger);
-  const state = stateOf(readLedger(ledgerPath), id);
-  const project = readProject(ledgerPath);
-  if (state.declined_on.length > 0) throw new Refused([`${shown(id)} was declined on ${state.declined_on.join(" and ")}: no request for it on any provider`]);
-  const attempt = state.attempts + 1;
-
-  const out = fromCaller(values.out);
-  const problem = outProblem(out);
-  if (problem) throw new Refused([problem]);
-  refuseReportPaths(out, "request", [[isClip ? "--clip" : "--image", specPath], ["--ledger", ledgerPath]]);
-  // Nor may an input be one of the two files the request writes in --out by its reference.
-  const overwritten = ([[isClip ? "--clip" : "--image", specPath], ["--ledger", ledgerPath]] as [string, string][]).flatMap(([flag, path]) =>
-    [`${id}.request.json`, `${id}.request.meta.json`]
-      .filter((named) => isOutPath(path, out, named))
-      .map((named) => `${flag} is ${shown(named)} in --out: the request would overwrite it`),
-  );
-  if (overwritten.length > 0) throw new Refused(overwritten);
+  const { ledgerPath, project, attempt } = askedAttempt(values.ledger, id);
+  const out = outFolder(values.out, flag, specPath, ledgerPath, id);
 
   // The body, in the provider's own shape. Output settings are fields here, never prompt words.
   const placeholder = (artifact: string) => `{{artifact:${artifact}}}`;
@@ -350,12 +492,15 @@ async function main(): Promise<number> {
     inputs: {
       clip: isClip ? specPath : null,
       image: isClip ? null : specPath,
+      song: null,
+      wav: null,
       provider,
       ledger: ledgerPath,
       start_artifact: start ?? null,
       window_artifact: windowArtifact ?? null,
       rate_per_second: ratePerSecond,
       rate_per_image: ratePerImage,
+      rate_per_task: null,
       resolution: values.resolution ?? null,
     },
     outputs: { request: name, meta: metaName, report: "request-report.json" },

@@ -1,0 +1,14 @@
+{
+  "secret": "UNIFICALLY_API_KEY",
+  "url": "https://api.unifically.com/v1/tasks",
+  "method": "POST",
+  "body": {
+    "model": "suno-ai/wav",
+    "input": {
+      "clip_id": "1901ec96-72c6-4c26-8e56-91028ca6070d"
+    }
+  },
+  "estimate": 0.01,
+  "idempotency_key": "<key>",
+  "return": true
+}

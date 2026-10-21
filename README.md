@@ -68,8 +68,10 @@ npm --prefix /opt/studio run film:audit -- --board <shots.json> --beats <beats.j
 npm --prefix /opt/studio run film:sheet -- --board <shots.json> --plates <dir> --out <dir>
 npm --prefix /opt/studio run film:depth -- --plate <plate.png> --out <dir>
 npm --prefix /opt/studio run film:edl -- --board <shots.json> --clips <dir> --words <words.json> --out <dir>
-npm --prefix /opt/studio run film:request -- --clip <clips/W01.json> --provider openrouter|higgsfield --ledger <ledger.jsonl> --out <dir> --start-artifact <id> [--window-artifact <id>] [--resolution 720p] [--rate-per-second X]
+npm --prefix /opt/studio run film:request -- --clip <clips/W01.json> --provider openrouter|higgsfield|unifically --ledger <ledger.jsonl> --out <dir> --start-artifact <id> [--window-artifact <id>] [--resolution 720p] [--rate-per-second X]
 npm --prefix /opt/studio run film:request -- --image <slot.json> --provider openrouter --ledger <ledger.jsonl> --out <dir> [--rate-per-image X]
+npm --prefix /opt/studio run film:request -- --song <song/tasks/T1.json> --provider unifically --ledger <ledger.jsonl> --out <dir> [--rate-per-task X]
+npm --prefix /opt/studio run film:request -- --wav <song/takes/S01.json> --provider unifically --ledger <ledger.jsonl> --out <dir>
 npm --prefix /opt/studio run film:ledger -- --ledger <ledger.jsonl> --out <dir> --asked <request.json> [--meta <request.meta.json>] | --polled <key> | --delivered <key> --file <path> | --declined <key> | --failed <key> | --check <reference> [--figures <json>] [--reason <text>]
 npm --prefix /opt/studio run film:sync -- --take <take.mp4> --window <window.wav> --beats <beats.json> --song-t0 <s> --out <dir>
 npm --prefix /opt/studio run film:chapter -- --board <shots.json> --edl <edl.json> --words <words.json> --beats <beats.json> --hits <hits.json> --display <display.txt> --plates <dir> --clips <dir> [--footage <dir>] [--brand <dir>] --chapter <id> --out <dir> [--range t0:t1] [--vertical] [--no-ramp (FILM_TEST=1 only)]
@@ -761,12 +763,12 @@ harness's `call_external` tool (spec 8.2): `film:request` shapes its input,
 the skill asks it inside a tranche a person opened, and `film:ledger` records
 what was asked and what came back.
 
-`film:request --clip clips/<id>.json --provider openrouter|higgsfield --ledger ledger.jsonl --out <dir> --start-artifact <id> [--window-artifact <id>] [--resolution 480p|720p|1080p] [--rate-per-second <usd>]`
+`film:request --clip clips/<id>.json --provider openrouter|higgsfield|unifically --ledger ledger.jsonl --out <dir> --start-artifact <id> [--window-artifact <id>] [--resolution 480p|720p|1080p] [--rate-per-second <usd>]`
 (or `--image <slot.json>` for an image slot, with `[--rate-per-image <usd>]`)
 writes two files. `<id>.request.json` is exactly the `call_external` input of
 spec 8.2, nothing more (the skill adds the id of the tranche it opened):
 
-- `secret`: `OPENROUTER_API_KEY` or `HIGGSFIELD_API_KEY`, the name only.
+- `secret`: `OPENROUTER_API_KEY`, `HIGGSFIELD_API_KEY` or `UNIFICALLY_API_KEY`, the name only.
 - `url` and `method: POST`: the provider's endpoint for the model and the mode.
 - `body`: the provider's own request shape. Every file it references is a
   `{{artifact:<id>}}` placeholder, which `call_external` replaces with a signed
@@ -838,6 +840,30 @@ over 110 words it is refused.
 
 An image slot file is `{id, kind: "image", model, prompt, refs: [<artifact id>], aspect_ratio}`;
 its file name is its id.
+
+A song and its WAV exports go to Unifically, a hosted wrapper for Suno, as read
+on 2026-10-21 (re-read it at spend): `--song <song/tasks/T1.json> --provider unifically
+[--rate-per-task <usd>]` and `--wav <song/takes/S01.json> --provider unifically`.
+Both write the same two files, with `return: true` and a poll at
+`GET https://api.unifically.com/v1/tasks/{task_id}`; the kit reads the poll as
+`data.status`, `data.cost`, `data.clips[]` and `data.wav_url`, an envelope the first live
+call confirms. A song file is `{id: "T1", kind: "song", title (1 to 80 characters), tags
+(1 to 1000), negative_tags (a string, may be empty), lyrics (1 to 5000), takes: ["S01", "S02"]}`:
+`takes` is exactly two keys like `S01`, the two clips one task answers. A take file is
+`{id: "S01", kind: "wav", clip_id, task_id}`; the file name is the id in both.
+
+| Unifically | Request body | Estimate | Meta |
+|---|---|---|---|
+| song | `POST https://api.unifically.com/v1/tasks`, `suno-ai/music`: `input` `{mv: "chirp-hawk", custom: true, prompt` (the lyrics)`, tags, negative_tags, title, make_instrumental: false}` | $0.06 a task (`--rate-per-task` overrides it) | `mode: "custom"`, `takes`, `rate_per_task`, `clips: "data.clips[]"`, `download: null` |
+| WAV | the same URL, `suno-ai/wav`: `input` `{clip_id}` | $0.01, `call_external`'s floor (Film spec v1.4, section 6) | `mode: "export"`, `clip_id`, `task_id`, `download: {from: "data.wav_url", fetch_to: "song/<take>.wav"}` |
+
+`--song` and `--wav` refuse (one line each) any of `--start-artifact`, `--window-artifact`,
+`--resolution`, `--rate-per-second` and `--rate-per-image` (`--song takes no --resolution`),
+and `--wav` also `--rate-per-task`; any other provider (`--song is answered by unifically only`);
+a `takes` that is not two distinct keys like `S01`; a title, tags or lyrics out of range; a
+`clip_id` or `task_id` that is not letters, digits, `.`, `_` and `-` (up to 128). The summary
+lines are `request: "T1" song on unifically, attempt 1, 2 takes, estimate $0.06, key 3f9a0c1d2e4b`
+and `request: "S01" wav on unifically, attempt 1, estimate $0.01, key 3f9a0c1d2e4b`.
 
 `film:request` refuses (exit 2, one line each, nothing written): a reference the
 ledger marks `declined` on any provider; a sung window outside 4 to 8 s; braces
@@ -1470,9 +1496,9 @@ and `model depth is not in "/opt/models" (run ...)`.
 
 `film:request`:
 
-- `film:request: --clip <clip.json> or --image <slot.json>, --provider, --ledger and --out are required`,
-  `film:request: give --clip or --image, not both`
-- `--provider "fal" has no known URL (openrouter or higgsfield)`,
+- `film:request: --clip <clip.json>, --image <slot.json>, --song <task.json> or --wav <take.json>, --provider, --ledger and --out are required`,
+  `film:request: give exactly one of --clip, --image, --song or --wav`
+- `--provider "fal" has no known URL (openrouter, higgsfield or unifically)`,
   `"P001" model "google/gemini-3-pro-image" has no known URL on higgsfield`
 - `--resolution is "4k", want 480p, 720p or 1080p`, `--rate-per-second is "0", want dollars above 0`,
   `no rate for bytedance/seedance-2.5 on higgsfield at 1080p: give --rate-per-second`,
@@ -1480,6 +1506,8 @@ and `model depth is not in "/opt/models" (run ...)`.
 - `--start-artifact is required for a clip`, `"W01" is sung: --window-artifact is required`,
   `"M01" is a motion clip: it takes no --window-artifact`, `--image takes no --start-artifact or --window-artifact`,
   `--start-artifact wants an artifact id (letters, digits, . _ : -)`
+- `--song is answered by unifically only`, `--song takes no --resolution`, `--wav takes no --rate-per-task`,
+  `"T9" takes wants exactly two keys like S01`, `"S01" has no clip_id`
 - `--clip is not a clip file`, `--clip: "W09.json" holds clip "W01"`, `"W01" kind is "dance", want sung or motion`,
   `--image is not an image slot file`, `--image: "P002.json" holds image slot "P001"`,
   `--image: "slot.json" has no id that names a file` (or `--clip`)

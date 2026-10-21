@@ -1,0 +1,20 @@
+{
+  "secret": "UNIFICALLY_API_KEY",
+  "url": "https://api.unifically.com/v1/tasks",
+  "method": "POST",
+  "body": {
+    "model": "suno-ai/music",
+    "input": {
+      "mv": "chirp-hawk",
+      "custom": true,
+      "prompt": "[Verse - spoken, deadpan]\nthe city wakes\nwe count the windows\n[Chorus - sung]\nhold on\nhold the light\n",
+      "tags": "deadpan spoken verse, sung chorus, minimal drums",
+      "negative_tags": "metal",
+      "title": "The city wakes",
+      "make_instrumental": false
+    }
+  },
+  "estimate": 0.06,
+  "idempotency_key": "<key>",
+  "return": true
+}
