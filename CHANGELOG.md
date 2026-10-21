@@ -5,8 +5,9 @@
 Three changes to `film:request`, `film:ledger` and `film:status` (Film spec
 v1.4, section 6 and D3). `walk`, `render`, `changelog`, `routes.json`, the
 other `film:*` commands and the Remotion compositions are unchanged, so a claw
-pinned to v0.2.0 keeps working from this tree, except that `film:status` now
-wants `project`.
+pinned to v0.2.0 keeps working from this tree, except that `film:status`, and
+every ledger used with `film:request` or `film:ledger --asked`, now want
+`project` in `status.json`.
 
 ### Changed
 
