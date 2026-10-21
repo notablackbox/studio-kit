@@ -1263,7 +1263,7 @@ runner has 2 vCPUs and 7 GB, which may double the suite to about 12 minutes
 take about 3 GB of the repository's 10 GB, and the job needs about 11 GB of
 the runner's disk.
 
-## Known limits in v0.2.0
+## Known limits in v0.3.0
 
 Found in review and left for a later release, one line each:
 
