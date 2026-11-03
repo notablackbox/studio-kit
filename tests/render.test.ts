@@ -674,7 +674,7 @@ test("a tool that cannot start, or that prints too much, fails in its own words"
   const loud = await runProcess("sh", ["-c", "head -c 20000000 /dev/zero"], { timeoutMs: 30_000 });
   assert.equal(loud.failure, "sh printed more than 16 MB");
   const fine = await runProcess("sh", ["-c", "echo out; echo err >&2; exit 3"], { timeoutMs: 5000 });
-  assert.deepEqual(fine, { status: 3, stdout: "out\n", stderr: "err\n", timedOut: false, failure: undefined });
+  assert.deepEqual(fine, { status: 3, signal: null, stdout: "out\n", stderr: "err\n", timedOut: false, failure: undefined });
 });
 
 test(

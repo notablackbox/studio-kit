@@ -189,7 +189,7 @@ export function validateScript(raw: unknown, clipsDir: string): { script?: Tease
 
 // The seam to the outside world: one child process, run to the end or to its time limit.
 // `failure` is set, in the kit's words, when the process could not be run or its output overran.
-export type RunResult = { status: number | null; stdout: string; stderr: string; timedOut: boolean; failure?: string };
+export type RunResult = { status: number | null; signal?: NodeJS.Signals | null; stdout: string; stderr: string; timedOut: boolean; failure?: string };
 export type Runner = (command: string, args: string[], options: { cwd?: string; timeoutMs: number }) => Promise<RunResult>;
 
 const OUTPUT_LIMIT = 16 * 1024 * 1024;
@@ -351,7 +351,7 @@ export const runProcess: Runner = (command, args, { cwd, timeoutMs }) =>
     child.stderr.on("data", keep(err));
 
     const closed = new Promise<void>((done) => child.on("close", () => done()));
-    const settle = async (status: number | null) => {
+    const settle = async (status: number | null, signal: NodeJS.Signals | null = null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -363,6 +363,7 @@ export const runProcess: Runner = (command, args, { cwd, timeoutMs }) =>
       if (!gone && !failure && !timedOut) failure = `${command} left processes that would not stop`;
       finish({
         status,
+        signal,
         stdout: Buffer.concat(out).toString("utf8"),
         stderr: Buffer.concat(err).toString("utf8"),
         timedOut,
@@ -376,7 +377,7 @@ export const runProcess: Runner = (command, args, { cwd, timeoutMs }) =>
       void settle(null);
     });
     // "exit", not "close": a descendant holding the pipes open must not keep the step waiting.
-    child.on("exit", (code) => void settle(code));
+    child.on("exit", (code, signal) => void settle(code, signal));
   });
 
 // A step's failure, in the kit's own words.

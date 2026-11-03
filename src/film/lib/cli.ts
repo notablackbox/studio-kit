@@ -222,6 +222,8 @@ export async function python<T = unknown>(module: string, args: string[], timeou
     const failure = result.failure.startsWith(command) ? `${shown(command)}${result.failure.slice(command.length)}` : result.failure;
     throw new Unexpected(failure);
   }
+  // SIGKILL with no time limit passed: nothing in the kit sends it, and the kernel's memory killer does.
+  if (result.signal) throw new Unexpected(`${what} was killed by ${result.signal}${result.signal === "SIGKILL" ? ", most likely out of memory" : ""}`);
   if (result.status === EXIT.refused) {
     const lines = result.stdout.split("\n").filter((line) => line.trim() !== "");
     if (lines.length > 0) throw new Refused(lines.map((line) => printable(line)));

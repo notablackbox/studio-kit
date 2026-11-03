@@ -485,6 +485,15 @@ the model, the seconds taken and any samples clipped. The vocal stem feeds
 `film:words` and `film:window`, the drum stem `film:beats` and `film:hits`, bass
 and other the impacts and risers.
 
+One split runs at a time on a box. A second `film:stems` waits for the first and
+says so on its line and as `waited_seconds` in the report. Memory is why: measured
+in a container capped at 4 CPUs and 6 GB, a split peaks at about 1.1 GB plus 5.7 MB
+per second of song (2.5 GB for four minutes), so three four-minute songs together, or
+two six-minute ones, are killed for memory. Running together saves little: three
+four-minute splits took 420 s with room to spare, against 540 s one after another.
+A process killed this way prints `was killed by SIGKILL, most likely out of memory`
+and exits 1.
+
 `film:beats --drums <drums.wav> --out <dir>`: the beat map, never one BPM. The
 spectral flux of the drum stem below 5 kHz every 4 ms (the grid goes on the kick
 and snare, not the hats); a local tempo per 20 s window every 5 s, in BPM steps

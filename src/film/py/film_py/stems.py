@@ -15,7 +15,7 @@ import time
 
 import numpy as np
 
-from film_py import done, model, models_dir, offline, quiet, spec, threads
+from film_py import done, model, models_dir, offline, quiet, spec, threads, wait_turn
 from film_py import audio
 
 STEMS = ("vocals", "drums", "bass", "other")
@@ -25,6 +25,9 @@ def main(argv) -> int:
     job = spec(argv)
     info = audio.check(job["in"], "--in")
     model("htdemucs")
+    # One split at a time: a four-minute song peaks near 2.5 GB, so three together are killed for
+    # memory on the 6 GB box, and two are on a six-minute song. Refusals come first, never after a wait.
+    waited = wait_turn("stems")
     started = time.monotonic()
     with quiet():
         offline(models_dir())
@@ -70,6 +73,7 @@ def main(argv) -> int:
         "duration": round(x.shape[1] / rate, 4),
         "clipped_samples": clipped,
         "seconds": round(time.monotonic() - started, 1),
+        "waited": waited,
     })
     return 0
 
