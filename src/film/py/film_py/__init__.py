@@ -11,10 +11,13 @@ This file imports nothing heavy: `film:score` loads it without torch.
 """
 
 import contextlib
+import fcntl
 import json
 import logging
 import os
 import sys
+import tempfile
+import time
 import warnings
 from pathlib import Path
 from typing import NoReturn
@@ -124,6 +127,19 @@ def threads() -> int:
     except (OSError, ValueError):
         pass
     return max(1, count)
+
+
+def wait_turn(name: str) -> float:
+    """Waits until no other process on this box holds the `name` lock; returns the seconds waited.
+
+    The lock lasts as long as the process. It is deliberately never released by hand: the kernel
+    lets go when the process ends, so a split the kernel killed for memory cannot leave it stuck.
+    """
+    path = os.path.join(tempfile.gettempdir(), f"studio-kit-{name}.lock")
+    handle = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o666)
+    started = time.monotonic()
+    fcntl.flock(handle, fcntl.LOCK_EX)
+    return round(time.monotonic() - started, 1)
 
 
 def offline(root: Path) -> None:

@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.3.1, 2026-11-03
+
+### Fixed
+
+- `film:stems`: one split at a time on a box. Three at once ran the 6 GB box out
+  of memory and the kernel killed some of them. A later split now waits for the
+  one running, and its line and `waited_seconds` in `stems-report.json` say how long.
+- Every `film:*` command that runs Python: a process killed by a signal now says
+  which, and says out of memory for SIGKILL, in place of `failed` with no reason.
+
 ## v0.3.0, 2026-10-21
 
 Three changes to `film:request`, `film:ledger` and `film:status` (Film spec

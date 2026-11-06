@@ -1,6 +1,8 @@
 import { before, test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { db, film, lines, power, readWav, song, worstMiss, type Truth } from "./fixtures/film.ts";
 
@@ -110,4 +112,51 @@ test("anything unexpected is exit 1 with one line on stderr", () => {
   assert.equal(result.status, 1);
   assert.equal(result.stdout, "");
   assert.deepEqual(lines(result.stderr), ["film:stems: python film_py.stems failed"]);
+});
+
+// A process holding the split lock in `temp`, as a split in progress does. Returns once it holds it.
+function holdTheLock(temp: string) {
+  const ready = join(temp, "ready");
+  const code = `import fcntl, os, sys, time
+fd = os.open(os.path.join(sys.argv[1], "studio-kit-stems.lock"), os.O_RDWR | os.O_CREAT, 0o666)
+fcntl.flock(fd, fcntl.LOCK_EX)
+open(sys.argv[2], "w").close()
+time.sleep(float(sys.argv[3]))`;
+  const seconds = "3";
+  const holder = spawn("python3", ["-I", "-c", code, temp, ready, seconds], { stdio: "ignore" });
+  const nap = new Int32Array(new SharedArrayBuffer(4));
+  while (!existsSync(ready)) Atomics.wait(nap, 0, 0, 20);
+  return holder;
+}
+
+test("a split waits its turn while another holds the box, and says it waited", () => {
+  const temp = mkdtempSync(join(tmpdir(), "split-lock-"));
+  const holder = holdTheLock(temp);
+  const result = film("stems", dir, ["--in", "song.wav", "--out", "queued"], { TMPDIR: temp });
+  holder.kill("SIGKILL");
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const report = JSON.parse(readFileSync(join(dir, "queued", "stems-report.json"), "utf8"));
+  assert.ok(report.waited_seconds >= 1, `waited ${report.waited_seconds}`);
+  assert.match(lines(result.stdout)[0], /^stems: 4 stems of 12\.0 s in \d+\.\d s \(htdemucs, cpu\), waited \d+\.\d s for another split$/);
+});
+
+test("a split killed by the kernel lets the next one go at once", () => {
+  const temp = mkdtempSync(join(tmpdir(), "split-lock-"));
+  const holder = holdTheLock(temp);
+  holder.kill("SIGKILL");
+  const nap = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(nap, 0, 0, 200);
+  const result = film("stems", dir, ["--in", "song.wav", "--out", "after-kill"], { TMPDIR: temp });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(JSON.parse(readFileSync(join(dir, "after-kill", "stems-report.json"), "utf8")).waited_seconds, 0);
+});
+
+test("a split the kernel kills says so", () => {
+  const python = join(dir, "killed-python.sh");
+  writeFileSync(python, "#!/bin/sh\nkill -KILL $$\n");
+  chmodSync(python, 0o755);
+  const result = film("stems", dir, ["--in", "song.wav", "--out", "killed"], { FILM_PYTHON: python });
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.deepEqual(lines(result.stderr), ["film:stems: python film_py.stems was killed by SIGKILL, most likely out of memory"]);
 });

@@ -10,6 +10,7 @@ import { EXIT, Refused, fromCaller, isMain, outProblem, parseFlags, python, refu
 // film:beats and film:hits, bass and other the impacts and risers.
 
 const COMMAND = "film:stems";
+// Counts the wait for another split too: a queue past it fails out loud instead of waiting on.
 const TIMEOUT_MS = 30 * 60 * 1000;
 const STEMS = ["vocals", "drums", "bass", "other"] as const;
 
@@ -22,6 +23,7 @@ type Separated = {
   duration: number;
   clipped_samples: Record<string, number>;
   seconds: number;
+  waited: number;
 };
 
 // Renames the folder `from` to `to`. Whatever is at `to` (an earlier run's stems, or a link,
@@ -83,13 +85,15 @@ async function main(): Promise<number> {
       model: separated.model,
       seconds,
       separation_seconds: separated.seconds,
+      waited_seconds: separated.waited,
       sample_rate: separated.sample_rate,
       channels: separated.channels,
       input_rate: separated.input_rate,
       duration: separated.duration,
       clipped_samples: separated.clipped_samples,
     });
-    console.log(`stems: 4 stems of ${separated.duration.toFixed(1)} s in ${seconds.toFixed(1)} s (${separated.model.name}, ${separated.model.device})`);
+    const wait = separated.waited >= 1 ? `, waited ${separated.waited.toFixed(1)} s for another split` : "";
+    console.log(`stems: 4 stems of ${separated.duration.toFixed(1)} s in ${seconds.toFixed(1)} s (${separated.model.name}, ${separated.model.device})${wait}`);
   } finally {
     rmSync(temp, { recursive: true, force: true });
     if (staging) rmSync(staging, { recursive: true, force: true });
