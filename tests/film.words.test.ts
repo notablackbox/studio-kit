@@ -91,13 +91,13 @@ test("without --expect the check is the aligner's own confidence; the silence be
 test("words under --min-conf fall back to faster-whisper, else to an even share of the gap", () => {
   // --min-conf 1 sends every word to the fallback; it does not move the gate.
   const result = film("words", dir, ["--vocals", "vocals.wav", "--lyrics", "lyrics.txt", "--out", "c", "--min-conf", "1"]);
-  assert.ok(result.status === 0 || result.status === 3, result.stdout + result.stderr);
+  assert.ok(result.status === 0 || result.status === 4, result.stdout + result.stderr);
   const report = JSON.parse(readFileSync(join(dir, "c", "words-report.json"), "utf8"));
   const timed = read(join(dir, "c"));
   // The gate is confidence 0.5 whatever --min-conf says, and the exit follows it.
   assert.equal(report.check.gate, 0.5);
   assert.equal(report.check.within, timed.words.filter((w) => w.conf >= 0.5).length);
-  assert.equal(result.status, report.check.within >= 0.9 * 12 ? 0 : 3);
+  assert.equal(result.status, report.check.within >= 0.9 * 12 ? 0 : 4);
   assert.equal(report.ok, result.status === 0);
   const whisper = timed.words.filter((w) => w.src === "whisper");
   assert.ok(whisper.length >= 6, `whisper placed ${whisper.length} words`);
@@ -128,24 +128,33 @@ test("exit 3 when fewer than 90 percent are within 0.10 s; the report and words.
   assert.ok(out.length >= 5);
   const report = JSON.parse(readFileSync(join(dir, "d", "words-report.json"), "utf8"));
   assert.equal(report.ok, false);
+  assert.equal(report.check.verdict, "fail");
   assert.ok(existsSync(join(dir, "d", "words.json")));
 });
 
-test("exit 3 on a stem with no voice: the confidence check fails", () => {
+test("exit 4 on a stem with no voice: a low confidence share is a review, never a pass, with every flagged spot", () => {
   const result = film("words", dir, ["--vocals", "drums.wav", "--lyrics", "lyrics.txt", "--out", "e"]);
-  assert.equal(result.status, 3, result.stdout + result.stderr);
-  assert.match(lines(result.stdout)[0], /^words: \d+ of 12 with confidence 0\.5 or more, want at least 90 percent$/);
+  assert.equal(result.status, 4, result.stdout + result.stderr);
+  const out = lines(result.stdout);
+  assert.match(out[0], /^words: \d+ of 12 with confidence 0\.5 or more, under 90 percent: review this take before it is used$/);
   const report = JSON.parse(readFileSync(join(dir, "e", "words-report.json"), "utf8"));
   assert.equal(report.ok, false);
+  assert.equal(report.check.ok, false);
+  assert.equal(report.check.verdict, "review");
+  assert.ok(existsSync(join(dir, "e", "words.json")));
+  // Every flag, not the ear check's first five: the review needs them all.
+  assert.ok(report.flags.length > 5, `${report.flags.length} flags`);
+  assert.deepEqual(out.slice(1), report.flags.map((f: { message: string }) => `review spot: ${f.message}`));
   assert.ok(report.ear_check.length >= 1 && report.ear_check.length <= 5);
 });
 
 test("--min-conf 0 cannot pass a weak alignment: the gate stays at confidence 0.5", () => {
   const result = film("words", dir, ["--vocals", "drums.wav", "--lyrics", "lyrics.txt", "--out", "e0", "--min-conf", "0"]);
-  assert.equal(result.status, 3, result.stdout + result.stderr);
-  assert.match(lines(result.stdout)[0], /^words: \d+ of 12 with confidence 0\.5 or more, want at least 90 percent$/);
+  assert.equal(result.status, 4, result.stdout + result.stderr);
+  assert.match(lines(result.stdout)[0], /^words: \d+ of 12 with confidence 0\.5 or more, under 90 percent: review this take before it is used$/);
   const report = JSON.parse(readFileSync(join(dir, "e0", "words-report.json"), "utf8"));
   assert.equal(report.ok, false);
+  assert.equal(report.check.verdict, "review");
   assert.equal(report.check.gate, 0.5);
   assert.equal(report.whisper_ran, false, "nothing is under --min-conf 0, so nothing falls back");
 });

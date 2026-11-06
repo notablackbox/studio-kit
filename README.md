@@ -368,7 +368,7 @@ and the exit codes it can end with (every one can also end with `1`):
 | `film:score` | `score-report.json` | 0, 2 |
 | `film:stems` | `stems/vocals.wav`, `drums.wav`, `bass.wav`, `other.wav`, `stems-report.json` | 0, 2 |
 | `film:beats` | `beats.json`, `beats-report.json` | 0, 2, 3 |
-| `film:words` | `words.json`, `words-report.json` | 0, 2, 3 |
+| `film:words` | `words.json`, `words-report.json` | 0, 2, 3, 4 |
 | `film:hits` | `hits.json`, `hits-report.json` | 0, 2 |
 | `film:window` | `<name>.wav`, `<name>.mp3`, `window-report.json` | 0, 2, 3 |
 | `film:audit` | `audit-report.json` | 0, 2, 3 |
@@ -541,14 +541,24 @@ keeps the aligner's time. `words.json` holds `words` (`i`, `w`, `line`, `t0`,
 `t1`, `conf`, `src`), `lines` (`line`, `text`, `t0`, `t1`) and `gaps` (2 s or
 more between two words, or after the last word to the end, each with the index
 of the word it follows in `after_word`; the silence before the first word is not a gap).
-The check: with `--expect` (a `words.json`, or the test song's `truth.json`), at
-least 90 percent of the words must start and end within 0.10 s of the expected
-times; without it, at least 90 percent must have a `conf` of 0.5 or more (fixed:
-`--min-conf 0` cannot pass a weak alignment).
-Otherwise exit `3`, `words.json` and the report still written, and one line per
-failure: `words: 8 of 12 within 0.10 s of the expected times, want at least 90 percent`
-(or `words: 5 of 12 with confidence 0.5 or more, want at least 90 percent`),
+The check, in the report's `check`: `by`, `within` of `of`, `share`, `ok` and
+`verdict` (`pass`, `fail` or `review`). With `--expect` (a `words.json`, or the
+test song's `truth.json`), at least 90 percent of the words must start and end
+within 0.10 s of the expected times. Otherwise it fails: exit `3`, `words.json`
+and the report still written, and one line per failure:
+`words: 8 of 12 within 0.10 s of the expected times, want at least 90 percent`,
 then `word 3 "we": starts +0.13 s, ends +0.00 s off` for each word off (up to 20).
+Without `--expect`, the check counts words with a `conf` of 0.5 or more (fixed:
+`--min-conf 0` cannot pass a weak alignment). Under 90 percent is a warning, not
+a failure and not a pass: the aligners' confidence on sung, mixed music is not
+measured timing, so a person listens and rules. Exit `4`, `words.json` and the
+report still written, `ok` and `check.ok` false, `check.verdict` `review`, then
+`words: 5 of 12 with confidence 0.5 or more, under 90 percent: review this take before it is used`
+and a `review spot: ...` line for every flag in `flags`, not just the ear
+check's five. A caller that treats only exit 3 as a stop must read
+`check.verdict` before it moves past this take: a review is a stop until a
+person rules on that exact take and report, and the ruling is never a timing
+pass.
 The ear check, in `words-report.json` (`ear_check`, at most five spots, most
 urgent first; `flags` holds them all) and printed as `ear check: ...` lines:
 `letters` (an all-caps token sung letter by letter), `order` (a word starting over 0.05 s before the one ahead), `gap` (over

@@ -20,9 +20,12 @@ which the kit's runner never does.)
    it, else at the first 10 ms frame over 0.3 of its peak; then refined the same way); else,
    between two placed words of its own line, to an even share of the gap (src interp); else it
    keeps the aligner's time. `min_conf` tunes the fallback only, never the gate.
-3. The gate: with `expect` (a words.json or the test song's truth.json), the share of words
-   whose start and end are both within 0.10 s of the expected ones; else the share with `conf`
-   of 0.5 or more (GATE, fixed). Under 90 percent fails (exit 3 on the Node side).
+3. The gate (gate()): with `expect` (a words.json or the test song's truth.json), the share of
+   words whose start and end are both within 0.10 s of the expected ones, and under 90 percent
+   fails (verdict "fail", exit 3 on the Node side). Without it, the share with `conf` of 0.5 or
+   more (GATE, fixed), and under 90 percent is a warning for a person's review (verdict "review",
+   exit 4), never a pass: aligner confidence on sung, mixed music is not measured timing, so it
+   cannot stop a take, and it cannot accept one either.
 4. The ear check, most urgent first, at most five spots: letters (an all-caps token sung letter
    by letter; a lyric line with no letters is refused before any work), order, gap (over 1 s between two words of a line),
    verylow (conf under 0.1), length (over 1.2 s, or over three times its line's median),
@@ -285,6 +288,37 @@ def flags_for(sheet_lines, words, timed):
     return found
 
 
+def gate(timed, expect):
+    """(check, failures, warnings) for the timed words, against `expect` spans or by confidence.
+
+    `check.ok` is only ever the measured verdict, so a reader of the old report never sees a
+    reviewed take as passed; `check.verdict` says which way it went: pass, fail or review.
+    """
+    failures, warnings = [], []
+    if expect is not None:
+        within = 0
+        off = []
+        for t, (e0, e1) in zip(timed, expect):
+            if abs(t["t0"] - e0) <= TOLERANCE and abs(t["t1"] - e1) <= TOLERANCE:
+                within += 1
+            else:
+                off.append(f"word {t['i']} {json.dumps(t['w'])}: starts {t['t0'] - e0:+.2f} s, ends {t['t1'] - e1:+.2f} s off")
+        check = {"by": "expect", "within": within, "of": len(timed), "tolerance": TOLERANCE}
+        ok = within >= SHARE * len(timed)
+        if not ok:
+            failures = [f"words: {within} of {len(timed)} within 0.10 s of the expected times, want at least 90 percent"] + off[:20]
+    else:
+        within = sum(1 for t in timed if t["conf"] >= GATE)
+        check = {"by": "conf", "within": within, "of": len(timed), "gate": GATE}
+        ok = within >= SHARE * len(timed)
+        if not ok:
+            warnings = [f"words: {within} of {len(timed)} with confidence {GATE:g} or more, under 90 percent: review this take before it is used"]
+    check["share"] = round(within / len(timed), 3)
+    check["ok"] = ok
+    check["verdict"] = "pass" if ok else "fail" if failures else "review"
+    return check, failures, warnings
+
+
 def main(argv) -> int:
     job = spec(argv)
     sheet_lines, _ = lyrics.parse(read_text(job["lyrics"], "--lyrics"))
@@ -340,32 +374,13 @@ def main(argv) -> int:
     if duration - timed[-1]["t1"] >= 2.0:
         gaps.append({"t0": timed[-1]["t1"], "t1": r(duration), "after_word": timed[-1]["i"]})
 
-    failures = []
-    if expect is not None:
-        within = 0
-        off = []
-        for t, (e0, e1) in zip(timed, expect):
-            if abs(t["t0"] - e0) <= TOLERANCE and abs(t["t1"] - e1) <= TOLERANCE:
-                within += 1
-            else:
-                off.append(f"word {t['i']} {json.dumps(t['w'])}: starts {t['t0'] - e0:+.2f} s, ends {t['t1'] - e1:+.2f} s off")
-        check = {"by": "expect", "within": within, "of": len(timed), "tolerance": TOLERANCE}
-        ok = within >= SHARE * len(timed)
-        if not ok:
-            failures = [f"words: {within} of {len(timed)} within 0.10 s of the expected times, want at least 90 percent"] + off[:20]
-    else:
-        within = sum(1 for t in timed if t["conf"] >= GATE)
-        check = {"by": "conf", "within": within, "of": len(timed), "gate": GATE}
-        ok = within >= SHARE * len(timed)
-        if not ok:
-            failures = [f"words: {within} of {len(timed)} with confidence {GATE:g} or more, want at least 90 percent"]
-    check["share"] = round(within / len(timed), 3)
-    check["ok"] = ok
+    check, failures, warnings = gate(timed, expect)
     flags = flags_for(sheet_lines, words, timed)
     done({
         "words_json": {"words": timed, "lines": out_lines, "gaps": gaps},
         "check": check,
         "failures": failures,
+        "warnings": warnings,
         "flags": flags,
         "ear_check": flags[:5],
         "sources": {s: sum(1 for t in timed if t["src"] == s) for s in ("w2v", "whisper", "interp")},

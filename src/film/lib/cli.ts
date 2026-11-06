@@ -9,11 +9,13 @@ import type { RunResult } from "../../render.ts";
 //   0 done and report written;
 //   2 refused before any work, one line per problem on stdout, nothing written;
 //   3 checked and failed, one line per failure on stdout, the report written;
+//   4 checked and not passed, for a person to review (film:words only): the warning and every
+//     spot to listen to on stdout, the report written with `ok` false;
 //   1 anything unexpected, one short line on stderr, no stack trace anywhere.
 // Every command writes `<name>-report.json` in --out (or beside the file it names), with `ok`,
 // the inputs it used and what it produced, and writes nowhere else but the system temp folder.
 
-export const EXIT = { done: 0, unexpected: 1, refused: 2, failed: 3 } as const;
+export const EXIT = { done: 0, unexpected: 1, refused: 2, failed: 3, review: 4 } as const;
 
 // The kit root, from this file's place in it (src/film/lib/cli.ts); never the current directory.
 export const KIT_ROOT = resolve(fileURLToPath(import.meta.url), "..", "..", "..", "..");
