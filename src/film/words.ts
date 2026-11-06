@@ -5,8 +5,10 @@ import { EXIT, Failed, Refused, fromCaller, isMain, outProblem, parseFlags, prin
 // of, an even share of the gap for the rest; `conf` and `src` per word, lines and long gaps,
 // and an ear-check list of at most five spots. With --display, each display line must consume
 // exactly its lyric line's words. Exit 3 when fewer than 90 percent of the words are within
-// 0.10 s of --expect's times, or, without --expect, have a confidence of 0.5 or more. That gate
-// is fixed: --min-conf only sets which words go to the fallback.
+// 0.10 s of --expect's times. Without --expect, fewer than 90 percent with a confidence of 0.5
+// or more is exit 4: a warning that a person reviews the take, every flagged spot printed, and
+// never a pass (the report's `ok` stays false). That gate is fixed: --min-conf only sets which
+// words go to the fallback.
 
 const COMMAND = "film:words";
 const TIMEOUT_MS = 20 * 60 * 1000;
@@ -14,8 +16,9 @@ const TIMEOUT_MS = 20 * 60 * 1000;
 type Spot = { flag: string; message: string; i?: number; line?: number; t0: number | null };
 type Timed = {
   words_json: { words: unknown[]; lines: unknown[]; gaps: unknown[] };
-  check: { by: "expect" | "conf"; within: number; of: number; share: number; ok: boolean; gate?: number };
+  check: { by: "expect" | "conf"; within: number; of: number; share: number; ok: boolean; verdict: "pass" | "fail" | "review"; gate?: number };
   failures: string[];
+  warnings: string[];
   flags: Spot[];
   ear_check: Spot[];
   sources: { w2v: number; whisper: number; interp: number };
@@ -67,7 +70,12 @@ async function main(): Promise<number> {
     duration: timed.duration,
   });
   // The lines quote words from the sheet: printed with every control escaped.
-  if (!timed.check.ok) throw new Failed(timed.failures.map((line) => printable(line)));
+  if (timed.check.verdict === "fail") throw new Failed(timed.failures.map((line) => printable(line)));
+  if (timed.check.verdict === "review") {
+    for (const line of timed.warnings) console.log(printable(line));
+    for (const spot of timed.flags) console.log(`review spot: ${printable(spot.message)}`);
+    return EXIT.review;
+  }
 
   const { w2v, whisper, interp } = timed.sources;
   const checked =
