@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.4.0, 2026-11-06
+
+`film:words` without `--expect` no longer stops a take on the aligners'
+confidence, and no longer passes one on it either. Every other command, the
+expected-times check, and `words.json` are unchanged. A caller pinned to v0.3.x
+that stops on exit 3 alone must read the new exit 4 before it pins v0.4.0.
+
+### Changed
+
+- `film:words` without `--expect`: fewer than 90 percent of the words at
+  confidence 0.5 or more is exit 4, a warning for a person's review, in place of
+  exit 3. It prints the warning, then a `review spot: ...` line for every
+  flag, not just the ear check's five. The report's `ok` and `check.ok` stay
+  false, as before.
+- `words-report.json`: `check.verdict` is `pass`, `fail` or `review`. Every
+  existing field keeps its name and meaning.
+
+### Unchanged
+
+- With `--expect`, under 90 percent of the words within 0.10 s of the
+  expected times is still exit 3. The 0.5 confidence cutoff, the 0.90 share,
+  `--min-conf` (the fallback only), the flags and the ear check are as they
+  were.
+
 ## v0.3.1, 2026-11-03
 
 ### Fixed
